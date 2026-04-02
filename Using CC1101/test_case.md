@@ -1,0 +1,1 @@
+Sweep frequencies from 387-464 MHz and measure RSSI + packet loss
