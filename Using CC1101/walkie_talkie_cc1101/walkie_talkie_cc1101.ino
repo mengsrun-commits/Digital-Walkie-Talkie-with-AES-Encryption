@@ -40,8 +40,8 @@
 #define CC1101_SCK   14
 #define CC1101_MISO  12
 #define CC1101_MOSI  13
-#define CC1101_CS    4
 #define CC1101_GDO0  2
+#define CC1101_CS    4
 
 SPIClass spiCC(HSPI);
 class CustomCC1101 : public CC1101 {
@@ -98,10 +98,10 @@ uint8_t savedChannel = MIN_CHANNEL_VALUE;
 
 #define BASE_FREQUENCY 433 //MHz
 #define SAMPLE_RATE 16000
-#define PACKET_SIZE 60
+#define PACKET_SIZE 32
 #define ADPCM_HEADER_SIZE 3
-#define ADPCM_DATA_BYTES (PACKET_SIZE - ADPCM_HEADER_SIZE) // 57
-#define SAMPLES_PER_FRAME (ADPCM_DATA_BYTES * 2)  // 114 samples per packet
+#define ADPCM_DATA_BYTES (PACKET_SIZE - ADPCM_HEADER_SIZE) 
+#define SAMPLES_PER_FRAME (ADPCM_DATA_BYTES * 2)  
 
 uint8_t txBuffer[2][PACKET_SIZE];
 volatile bool bufferReady[2] = {false, false};
@@ -820,7 +820,7 @@ void cc1101_init(){
     const float bitrate = 250.0; //kbps
     const float frequency_deviation = 127.0; //kHz 
     const float rxBandwidth = 540.0; //kHz 
-    const int8_t radio_power = 12; // dBm
+    const int8_t radio_power = 10; // dBm
     
     int state = radio.begin(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING, bitrate, frequency_deviation, rxBandwidth, radio_power, 32);
     if (state == RADIOLIB_ERR_NONE) {
@@ -836,7 +836,7 @@ void cc1101_init(){
         radio.SPIsetRegValue(0x12, 0x10, 6, 4);
 
         // Map interrupt dynamically back to RadioLib scope
-        radio.setGdo0Action(setFlag, RISING);
+        radio.setPacketReceivedAction(setFlag);
         radio.startReceive();
     } else {
         Serial.print(F("CC1101 init failed, code "));
