@@ -37,11 +37,11 @@
 #define MAX98357A_DIN 22
 
 // CC1101 SPI
-#define CC1101_SCK   14
-#define CC1101_MISO  12
-#define CC1101_MOSI  13
-#define CC1101_GDO0  2
-#define CC1101_CS    4
+#define CC1101_SCK   14 
+#define CC1101_MISO  12 
+#define CC1101_MOSI  13 
+#define CC1101_GDO0  2  
+#define CC1101_CS    4 
 
 SPIClass spiCC(HSPI);
 class CustomCC1101 : public CC1101 {
@@ -112,7 +112,7 @@ volatile bool isTransmitting = false;
 
 // Receive-side jitter ring buffer
 #define RX_RING_SIZE 18
-#define RX_PREFILL 2 //How many packets to fill before sending to amp
+#define RX_PREFILL 4 //How many packets to fill before sending to amp
 uint8_t rxRing[RX_RING_SIZE][PACKET_SIZE];
 volatile uint8_t rxHead = 0;
 volatile uint8_t rxTail = 0;
@@ -123,11 +123,7 @@ portMUX_TYPE rxCountMux = portMUX_INITIALIZER_UNLOCKED;
 // ADPCM encoder state (persistent across frames during TX)
 typedef struct { int16_t predicted; uint8_t index; } ADPCMState;
 
-// Async RX interrupt flag
-volatile bool receivedFlag = false;
-void IRAM_ATTR setFlag() {
-    receivedFlag = true;
-}
+// (SPI polling mode — no interrupt flag needed)
 
 ADPCMState txAdpcmState = {0, 0};
 
@@ -285,6 +281,42 @@ void switchToSpeakerPins() {
 // 5. FREERTOS TASKS
 // =================================================================
 
+// Helpers to mimic RF24 API structure for cleaner radioTask
+bool radio_available() {
+    // Check for RXFIFO_OVERFLOW
+    if (radio.SPIgetRegValue(0x35, 4, 0) == 0x11) {
+        radio.standby();
+        radio.SPIsendCommand(0x3A); // SFRX
+        radio.startReceive();
+        return false;
+    }
+    
+    // Check if a full packet is present
+    uint8_t rxBytes = radio.SPIgetRegValue(0x3B, 6, 0);
+    if (rxBytes >= PACKET_SIZE) {
+        // Double-read errata check
+        uint8_t rxBytes2 = radio.SPIgetRegValue(0x3B, 6, 0);
+        return (rxBytes2 >= PACKET_SIZE);
+    }
+    return false;
+}
+
+void radio_read(uint8_t *buf, uint8_t len) {
+    // Hardware-level SPI burst read of the CC1101 RX FIFO.
+    // This perfectly mimics RF24: reads bytes without changing state!
+    spiCC.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(CC1101_CS, LOW);
+    
+    // 0xFF = 0x3F (RX FIFO address) | 0x80 (Read Bit) | 0x40 (Burst)
+    spiCC.transfer(0xFF); 
+    for (int i = 0; i < len; i++) {
+        buf[i] = spiCC.transfer(0x00);
+    }
+    
+    digitalWrite(CC1101_CS, HIGH);
+    spiCC.endTransaction();
+}
+
 void audioCaptureTask(void *param) {
     size_t bytesRead;
     int32_t rawBuffer[SAMPLES_PER_FRAME];
@@ -359,6 +391,7 @@ void radioTask(void *param) {
     static unsigned long lastRxPrint = 0;
     static int txSuccessCount = 0;
     static int txFailCount = 0;
+    static int rxPacketCount = 0;
     
     while (1) {
         if (isTransmitting) {
@@ -389,6 +422,7 @@ void radioTask(void *param) {
                     txSuccessCount++;
                 } else {
                     txFails++;
+                    txFailCount++;
                 }
                 txBufferIndex ^= 1;
 
@@ -402,40 +436,51 @@ void radioTask(void *param) {
             }
             taskYIELD();
         } else {
-            // --- RECEIVE MODE (interrupt-driven map to GDO0) ---
-            if (receivedFlag) {
-                receivedFlag = false;
-                
-                uint8_t tempBuf[PACKET_SIZE];
-                int state = radio.readData(tempBuf, PACKET_SIZE);
-                
-                if (state == RADIOLIB_ERR_NONE) {
-                    if (rxCount < RX_RING_SIZE) {
-                        Serial.printf("RX: packet received! RSSI: %.1f dBm | ring: %d/%d\n", radio.getRSSI(), rxCount + 1, RX_RING_SIZE);
-                        memcpy(rxRing[rxHead], tempBuf, PACKET_SIZE);
-                        rxHead = (rxHead + 1) % RX_RING_SIZE;
-                        portENTER_CRITICAL(&rxCountMux);
-                        rxCount++;
-                        portEXIT_CRITICAL(&rxCountMux);
-                        lastReceiveTime = millis();
+            // --- RECEIVE MODE ---
+            // Drain all available radio packets into jitter ring buffer
+            if (radio_available()) {
+                while (radio_available() && rxCount < RX_RING_SIZE) {
+                    radio_read(rxRing[rxHead], PACKET_SIZE);
+                    rxHead = (rxHead + 1) % RX_RING_SIZE;
+                    portENTER_CRITICAL(&rxCountMux);
+                    rxCount++;
+                    portEXIT_CRITICAL(&rxCountMux);
+                    lastReceiveTime = millis();
+                    rxPacketCount++;
 
-                        if (displayState == STATE_IDLE) {
-                            displayState = STATE_RECEIVE;
-                            dotCount = 0;
-                            lastAnimUpdate = millis();
-                        }
+                    if (displayState == STATE_IDLE) {
+                        displayState = STATE_RECEIVE;
+                        dotCount = 0;
+                        lastAnimUpdate = millis();
                     }
                 }
-                // Prep for next interrupt
-                radio.startReceive();
+            }
+            
+            // Periodic diagnostics (every 2s)
+            if (millis() - lastRxPrint > 2000) {
+                uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
+                uint8_t rxb = radio.SPIgetRegValue(0x3B, 6, 0);
+                Serial.printf("RX: %d pkts | MARC=0x%02X RXBYTES=%d ring=%d/%d CH=%d F=%.2f\n", 
+                    rxPacketCount, marc, rxb, rxCount, RX_RING_SIZE, currentChannel, 
+                    (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING));
+                rxPacketCount = 0;
+                lastRxPrint = millis();
+                
+                // Only recover from actual error states
+                if (marc == 0x11 || marc == 0x16) { // RXFIFO_OVERFLOW or TXFIFO_UNDERFLOW
+                    Serial.printf("RX: error state 0x%02X, recovering\n", marc);
+                    radio.standby();
+                    radio.SPIsendCommand(0x3A); // SFRX
+                    radio.startReceive();
+                }
             }
 
             if (channelUpdatePending) {
                 radio.standby();
+                radio.SPIsendCommand(0x3A); // SFRX - flush before channel change
                 radio.setFrequency(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING);
-                radio.startReceive();
+                radio.startReceive(); // IDLE -> RX transition auto-calibrates
                 channelUpdatePending = false;
-                receivedFlag = false;
             }
             vTaskDelay(1);
         }
@@ -529,6 +574,7 @@ void buttonTask(void *param) {
         } else if (!pressed && isTransmitting) {
             isTransmitting = false;
             radio.standby();
+            radio.SPIsendCommand(0x3A); // SFRX - flush stale RX data
             switchToSpeakerPins();
             vTaskDelay(pdMS_TO_TICKS(10));
 
@@ -543,7 +589,7 @@ void buttonTask(void *param) {
                 scrollX = SCREEN_WIDTH;
             }
             Serial.println("RX mode");
-            radio.startReceive(); // Re-arm RX!
+            radio.startReceive(); // Re-arm RX
         }
 
         unsigned long now = millis();
@@ -835,8 +881,10 @@ void cc1101_init(){
         // Hard-set GFSK modulation via inherited SPIsetRegValue wrapper
         radio.SPIsetRegValue(0x12, 0x10, 6, 4);
 
-        // Map interrupt dynamically back to RadioLib scope
-        radio.setPacketReceivedAction(setFlag);
+        // Stay in RX after packet reception — radio keeps listening
+        // while we read FIFO via SPI, zero deaf time between packets
+        radio.SPIsetRegValue(0x17, 0x0C, 3, 2);  // MCSM1: RXOFF_MODE = 3
+
         radio.startReceive();
     } else {
         Serial.print(F("CC1101 init failed, code "));
