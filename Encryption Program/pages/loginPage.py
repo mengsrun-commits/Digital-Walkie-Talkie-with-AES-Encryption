@@ -48,6 +48,7 @@ class DownwardComboBox(QComboBox):
 class LoginApp(QWidget):
     login_success = pyqtSignal()
     back_to_start = pyqtSignal()
+    device_disconnected = pyqtSignal(str)
     FORM_MIN_WIDTH = 560
     FORM_MAX_WIDTH = 900
     FORM_WIDTH_RATIO = 0.7
@@ -72,16 +73,34 @@ class LoginApp(QWidget):
         self.setup_ui()
 
     def start_connection(self):
-        if self._services_started:
-            return
         self._services_started = True
-        self.start_serial_connection_worker()
-        self._setup_serial_reader()
-        if hasattr(self, 'device_poll_timer'):
-            self.device_poll_timer.start()
+
+        # Ensure UI/Service components are initialized
+        if not hasattr(self, 'serial_read_timer'): self._setup_serial_reader()
+        if not hasattr(self, 'device_poll_timer'): self._setup_device_polling()
+        if not hasattr(self, 'connecting_dots_timer'): self._setup_connecting_animation()
+
+        # Always start/restart timers when entering the page
+        if not self.serial_read_timer.isActive(): self.serial_read_timer.start()
+        if not self.device_poll_timer.isActive(): self.device_poll_timer.start()
         
         if hasattr(self, 'waiting_pulse') and self.waiting_pulse.state() != QPropertyAnimation.State.Running:
             self.waiting_pulse.start()
+
+        # Check if we already have active connections
+        active_ports = [p for p, c in self.serial_connections.items() if c.is_open]
+        if active_ports:
+            # Re-trigger handshake for each existing port to ensure fresh data
+            for port in active_ports:
+                print(f"Re-triggering READY handshake for {port}...")
+                self._send_ready(port)
+            
+            # Update UI immediately to avoid "stuck" feeling
+            self._refresh_device_list()
+            return
+
+        # No active ports, start search
+        self.start_serial_connection_worker()
 
     def stop_connection(self):
         self._services_started = False
@@ -123,6 +142,27 @@ class LoginApp(QWidget):
             return f"{port} ({device_name})"
         return port
     
+    def _send_ready(self, port):
+        connection = self.serial_connections.get(port)
+        if connection and connection.is_open:
+            try:
+                connection.write(b"ready\n")
+                print(f"Sent READY to {port}")
+            except Exception as e:
+                print(f"Failed to send READY to {port}: {e}")
+                # Connection is likely dead (unplugged/replugged)
+                try:
+                    connection.close()
+                except:
+                    pass
+                if port in self.serial_connections:
+                    del self.serial_connections[port]
+                if port in self.latest_packets:
+                    del self.latest_packets[port]
+                
+                # Re-trigger connection search to find the new handle
+                QTimer.singleShot(100, self.start_connection)
+
     def _read_serial_data(self):
         selected_port = self._selected_port()
 
@@ -132,6 +172,9 @@ class LoginApp(QWidget):
                     line = connection.readline().decode(errors="ignore").strip()
                     if not line:
                         continue
+
+                    # DEBUG: Print raw lines to help diagnose handshake issues
+                    print(f"[{port}] RX: {line}")
 
                     try:
                         msg = json.loads(line)
@@ -349,6 +392,28 @@ class LoginApp(QWidget):
         ports = find_esp32_ports()
         had_devices = bool(self._device_ports)  # <-- previous state
 
+        # PROACTIVE CLEANUP: Remove any connections that are no longer physically present
+        active_tracked_ports = list(self.serial_connections.keys())
+        for port in active_tracked_ports:
+            if port not in ports:
+                print(f"Device {port} was unplugged. Cleaning up...")
+                try:
+                    self.serial_connections[port].close()
+                except:
+                    pass
+                del self.serial_connections[port]
+                if port in self.latest_packets:
+                    del self.latest_packets[port]
+                self.device_disconnected.emit(port)
+            else:
+                # Send heartbeat to keep connection alive on ESP32
+                try:
+                    conn = self.serial_connections[port]
+                    if conn.is_open:
+                        conn.write(b"ping\n")
+                except Exception as e:
+                    pass
+
         if ports != self._device_ports:
             self._device_ports = list(ports)
             selected = self._selected_port()
@@ -500,6 +565,16 @@ class LoginApp(QWidget):
 
             print("\n✅ Correct password!")
             print("Decrypted message:", plaintext.decode())
+
+            # Notify ESP32 of successful login
+            selected_port = self._selected_port()
+            conn = self.serial_connections.get(selected_port)
+            if conn and conn.is_open:
+                try:
+                    conn.write(b"login_ok\n")
+                    print(f"Sent LOGIN_OK to {selected_port}")
+                except:
+                    pass
 
             self.status_label.setStyleSheet("color: green; font-weight: bold;")
             self.status_label.setText("✅ Welcome! Logging in...")

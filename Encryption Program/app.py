@@ -25,6 +25,7 @@ class MyApp(QWidget):
         self.start_page.on_preview.connect(lambda: self.show_program_page(from_preview=True))
         self.login_page.login_success.connect(self.show_program_page)
         self.login_page.back_to_start.connect(self.on_back_to_start)
+        self.login_page.device_disconnected.connect(self._on_device_disconnected)
         self.program_page.back_to_login.connect(self.show_login_page)
         self.program_page.back_to_start.connect(self.show_start_page)
 
@@ -36,7 +37,6 @@ class MyApp(QWidget):
         self.stack.setCurrentWidget(self.start_page)
 
     def on_back_to_start(self):
-        self.login_page.stop_connection()
         self.show_start_page()
         
     def show_login_page(self):
@@ -45,6 +45,17 @@ class MyApp(QWidget):
 
     def show_program_page(self, from_preview=False):
         self.program_page.set_back_mode(from_preview)
+        # Ensure ProgramPage UI is reset when entering
+        self.program_page.content_widget.show()
+        self.program_page.back_button.show()
+        self.program_page.disconnect_label.hide()
+        
         self.stack.setCurrentWidget(self.program_page)
         QTimer.singleShot(0, self.login_page.clear_credentials)
+
+    def _on_device_disconnected(self, port):
+        """Handler for when a device is physically unplugged."""
+        if self.stack.currentWidget() == self.program_page:
+            # If we are on program page, show message and exit to start
+            self.program_page.show_disconnect_and_exit()
         

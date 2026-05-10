@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 
@@ -14,25 +14,38 @@ class ProgramPage(QWidget):
 		self._build_ui()
 
 	def _build_ui(self):
-		main_layout = QVBoxLayout()
-		main_layout.setContentsMargins(24, 24, 24, 24)
+		self.main_layout = QVBoxLayout()
+		self.main_layout.setContentsMargins(24, 24, 24, 24)
 
-		header_layout = QHBoxLayout()
+		self.header_layout = QHBoxLayout()
 
 		self.back_button = QPushButton("Back to Login")
 		self.back_button.setFixedHeight(32)
 		self.back_button.clicked.connect(self._on_back_clicked)
-		header_layout.addWidget(self.back_button, alignment=Qt.AlignmentFlag.AlignLeft)
+		self.header_layout.addWidget(self.back_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
-		main_layout.addLayout(header_layout)
+		self.main_layout.addLayout(self.header_layout)
 
-		title = QLabel("Program Page")
-		title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-		title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-		main_layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
+		self.content_widget = QWidget()
+		self.content_layout = QVBoxLayout(self.content_widget)
+		self.content_layout.setContentsMargins(0, 0, 0, 0)
 
-		main_layout.addStretch()
-		self.setLayout(main_layout)
+		self.title = QLabel("Program Page")
+		self.title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+		self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self.content_layout.addWidget(self.title, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+		self.content_layout.addStretch()
+		self.main_layout.addWidget(self.content_widget)
+
+		# Disconnect Overlay (hidden by default)
+		self.disconnect_label = QLabel("Device Disconnected!")
+		self.disconnect_label.setStyleSheet("color: #ff4d4d; font-weight: bold; font-size: 20px;")
+		self.disconnect_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self.disconnect_label.hide()
+		self.main_layout.addWidget(self.disconnect_label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+		self.setLayout(self.main_layout)
 
 	def set_back_mode(self, is_preview: bool):
 		self._is_preview = is_preview
@@ -40,6 +53,14 @@ class ProgramPage(QWidget):
 			self.back_button.setText("Back to start")
 		else:
 			self.back_button.setText("Back to Login")
+
+	def show_disconnect_and_exit(self):
+		"""Show disconnect message and redirect to start page after a delay."""
+		self.content_widget.hide()
+		self.back_button.hide()
+		self.disconnect_label.show()
+		# Automatically go back to start after 2.5 seconds
+		QTimer.singleShot(2500, self.back_to_start.emit)
 
 	def _on_back_clicked(self):
 		if self._is_preview:
