@@ -104,6 +104,18 @@ const uint8_t MIN_CHANNEL_VALUE = 80;
 #define ADPCM_HEADER_SIZE 3
 #define ADPCM_DATA_BYTES (PACKET_SIZE - ADPCM_HEADER_SIZE)
 #define SAMPLES_PER_FRAME (ADPCM_DATA_BYTES * 2)  // 58 samples per packet
+
+// --- Channel 90 AES-GCM Encryption ---
+// Encrypted packet layout (32 bytes total):
+//   [0-3]   : Packet counter (u32, plaintext) — forms per-packet GCM nonce suffix
+//   [4-27]  : AES-GCM ciphertext (24 bytes)
+//   [28-31] : Truncated GCM auth tag (4 bytes)
+#define ENCRYPTED_CHANNEL    90
+#define ENC_PLAINTEXT_SIZE   24   // 3-byte ADPCM header + 21-byte ADPCM data
+#define ENC_ADPCM_DATA_BYTES 21   // 21 bytes = 42 ADPCM samples
+#define ENC_SAMPLES_PER_FRAME 42  // samples decoded per encrypted packet
+#define ENC_TAG_SIZE          4   // truncated GCM tag
+#define ENC_COUNTER_SIZE      4   // packet counter field
 const uint8_t SHARED_ADDRESS[6] = "Srun";
 
 SPIClass spiNRF(HSPI);
@@ -154,6 +166,107 @@ String b64encode(const unsigned char* input, size_t len){
 
     mbedtls_base64_encode(out, sizeof(out), &out_len, input, len);
     return String((char*)out).substring(0, out_len);
+}
+
+// =================================================================
+// RADIO AES-GCM ENCRYPTION (Channel 90)
+// =================================================================
+const char* RADIO_PASSWORD = "passwordEncryption";
+
+uint8_t radioKey[32];       // AES-256 key (derived from RADIO_PASSWORD)
+uint8_t radioBaseNonce[8];  // 8-byte base; combined with counter → 12-byte GCM nonce
+volatile uint32_t txPacketCounter = 0;  // monotonically increasing TX sequence number
+
+// Derive radioKey and radioBaseNonce deterministically from RADIO_PASSWORD and PASSWORD.
+// Since all devices share the same passwords, they arrive at the same encryption state.
+void initRadioEncryption() {
+    Serial.println("[Radio] Deriving CH90 encryption key from passwords...");
+    
+    // 1. Derive Radio Key: Key=RADIO_PASSWORD, Salt=PASSWORD
+    mbedtls_pkcs5_pbkdf2_hmac_ext(
+        MBEDTLS_MD_SHA256,
+        (const unsigned char*)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
+        (const unsigned char*)PASSWORD, strlen(PASSWORD),
+        5000, 32, radioKey
+    );
+
+    // 2. Derive Nonce Base: Key=RADIO_PASSWORD, Salt=PASSWORD + "salt"
+    // We add a suffix to ensure the nonce derivation is mathematically distinct from the key
+    char nonceSalt[64];
+    snprintf(nonceSalt, sizeof(nonceSalt), "%s_nonce", PASSWORD);
+    
+    uint8_t nonceBuf[32];
+    mbedtls_pkcs5_pbkdf2_hmac_ext(
+        MBEDTLS_MD_SHA256,
+        (const unsigned char*)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
+        (const unsigned char*)nonceSalt, strlen(nonceSalt),
+        1000, 32, nonceBuf
+    );
+    memcpy(radioBaseNonce, nonceBuf, 8);
+    
+    Serial.println("[Radio] CH90 encryption ready (Password-derived).");
+}
+
+// Encrypt ENC_PLAINTEXT_SIZE (24) bytes into a 32-byte radio packet.
+// Packet: [counter(4)] [ciphertext(24)] [tag_truncated(4)]
+bool encryptRadioPacket(const uint8_t* plaintext, uint8_t* outPkt, uint32_t counter) {
+    // 12-byte GCM nonce = radioBaseNonce[8] + counter[4]
+    uint8_t nonce[12];
+    memcpy(nonce, radioBaseNonce, 8);
+    nonce[8]  = (counter >> 24) & 0xFF;
+    nonce[9]  = (counter >> 16) & 0xFF;
+    nonce[10] = (counter >>  8) & 0xFF;
+    nonce[11] =  counter        & 0xFF;
+
+    // Write counter into packet bytes [0-3]
+    outPkt[0] = nonce[8];  outPkt[1] = nonce[9];
+    outPkt[2] = nonce[10]; outPkt[3] = nonce[11];
+
+    uint8_t fullTag[16];
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, radioKey, 256) != 0) {
+        mbedtls_gcm_free(&gcm); return false;
+    }
+    int ret = mbedtls_gcm_crypt_and_tag(
+        &gcm, MBEDTLS_GCM_ENCRYPT, ENC_PLAINTEXT_SIZE,
+        nonce, 12, NULL, 0,
+        plaintext,
+        outPkt + ENC_COUNTER_SIZE,  // ciphertext → bytes [4-27]
+        16, fullTag
+    );
+    mbedtls_gcm_free(&gcm);
+    if (ret != 0) return false;
+    // Copy first 4 bytes of tag → bytes [28-31]
+    memcpy(outPkt + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE, fullTag, ENC_TAG_SIZE);
+    return true;
+}
+
+// Decrypt a 32-byte radio packet. Returns false if auth tag mismatch.
+bool decryptRadioPacket(const uint8_t* inPkt, uint8_t* outPlaintext) {
+    // Reconstruct 12-byte nonce from packet bytes [0-3]
+    uint8_t nonce[12];
+    memcpy(nonce, radioBaseNonce, 8);
+    nonce[8]  = inPkt[0]; nonce[9]  = inPkt[1];
+    nonce[10] = inPkt[2]; nonce[11] = inPkt[3];
+
+    uint8_t fullTag[16];
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, radioKey, 256) != 0) {
+        mbedtls_gcm_free(&gcm); return false;
+    }
+    int ret = mbedtls_gcm_crypt_and_tag(
+        &gcm, MBEDTLS_GCM_DECRYPT, ENC_PLAINTEXT_SIZE,
+        nonce, 12, NULL, 0,
+        inPkt + ENC_COUNTER_SIZE,   // ciphertext at bytes [4-27]
+        outPlaintext,
+        16, fullTag
+    );
+    mbedtls_gcm_free(&gcm);
+    if (ret != 0) return false;
+    // Verify truncated 4-byte tag
+    return (memcmp(fullTag, inPkt + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE, ENC_TAG_SIZE) == 0);
 }
 
 // =================================================================
@@ -309,49 +422,64 @@ void audioCaptureTask(void *param) {
 
         i2s_read(I2S_NUM_0, rawBuffer, SAMPLES_PER_FRAME * sizeof(int32_t), &bytesRead, portMAX_DELAY);
 
-        // --- DC Removal & Noise gate: measure TRUE AC peak ---
+        // --- DC Removal & Noise gate ---
         int32_t peak = 0;
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
             int32_t sample = rawBuffer[i] >> 14;
-
-            // 1. Remove DC offset FIRST so filter state stays accurate 
-            // and noise gate strictly triggers on AC speech peaks
             sample = hpFilter((int16_t)sample);
-
             int32_t a = (sample < 0) ? -sample : sample;
             if (a > peak) peak = a;
-            
-            pcmBuffer[i] = (int16_t)sample; 
+            pcmBuffer[i] = (int16_t)sample;
         }
 
-        if (peak < NOISE_GATE_THRESHOLD) {
-            // Silence: header predicted=0, index=0, data bytes=0
-            memset(txBuffer[fillBuffer], 0, PACKET_SIZE);
-            txAdpcmState.predicted = 0;
-            txAdpcmState.index = 0;
-        } else {
-            for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-                int32_t sample = pcmBuffer[i];
+        bool useEncryption = (currentChannel == ENCRYPTED_CHANNEL);
 
-                // 2. Early soft limit
-                sample = softLimiter(sample, LIMIT_PRE);
-
-                // 3. Apply fixed mic gain
-                sample = (sample * FIXED_MIC_GAIN) >> 8;
-                
-                // 4. Final limit
-                sample = softLimiter(sample, LIMIT_PRE);
-                pcmBuffer[i] = (int16_t)sample;
+        if (useEncryption) {
+            // --- ENCRYPTED PATH (Channel 90) ---
+            // Plaintext: [pred_hi][pred_lo][index][adpcm_data x21] = 24 bytes
+            uint8_t plaintext[ENC_PLAINTEXT_SIZE];
+            if (peak < NOISE_GATE_THRESHOLD) {
+                memset(plaintext, 0, ENC_PLAINTEXT_SIZE);
+                txAdpcmState.predicted = 0;
+                txAdpcmState.index = 0;
+            } else {
+                for (int i = 0; i < ENC_SAMPLES_PER_FRAME; i++) {
+                    int32_t sample = pcmBuffer[i];
+                    sample = softLimiter(sample, LIMIT_PRE);
+                    sample = (sample * FIXED_MIC_GAIN) >> 8;
+                    sample = softLimiter(sample, LIMIT_PRE);
+                    pcmBuffer[i] = (int16_t)sample;
+                }
+                plaintext[0] = (uint8_t)(txAdpcmState.predicted >> 8);
+                plaintext[1] = (uint8_t)(txAdpcmState.predicted & 0xFF);
+                plaintext[2] = txAdpcmState.index;
+                // Encode 42 samples → 21 bytes ADPCM
+                adpcmEncode(pcmBuffer, &plaintext[ADPCM_HEADER_SIZE],
+                            ENC_SAMPLES_PER_FRAME, &txAdpcmState);
             }
-
-            // Pack ADPCM header (predictor state for independent packet decode)
-            txBuffer[fillBuffer][0] = (uint8_t)(txAdpcmState.predicted >> 8);
-            txBuffer[fillBuffer][1] = (uint8_t)(txAdpcmState.predicted & 0xFF);
-            txBuffer[fillBuffer][2] = txAdpcmState.index;
-
-            // Encode 58 samples → 29 bytes of 4-bit ADPCM
-            adpcmEncode(pcmBuffer, &txBuffer[fillBuffer][ADPCM_HEADER_SIZE],
-                        SAMPLES_PER_FRAME, &txAdpcmState);
+            uint32_t counter = txPacketCounter++;
+            encryptRadioPacket(plaintext, txBuffer[fillBuffer], counter);
+        } else {
+            // --- UNENCRYPTED PATH (all other channels) ---
+            if (peak < NOISE_GATE_THRESHOLD) {
+                memset(txBuffer[fillBuffer], 0, PACKET_SIZE);
+                txAdpcmState.predicted = 0;
+                txAdpcmState.index = 0;
+            } else {
+                for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+                    int32_t sample = pcmBuffer[i];
+                    sample = softLimiter(sample, LIMIT_PRE);
+                    sample = (sample * FIXED_MIC_GAIN) >> 8;
+                    sample = softLimiter(sample, LIMIT_PRE);
+                    pcmBuffer[i] = (int16_t)sample;
+                }
+                txBuffer[fillBuffer][0] = (uint8_t)(txAdpcmState.predicted >> 8);
+                txBuffer[fillBuffer][1] = (uint8_t)(txAdpcmState.predicted & 0xFF);
+                txBuffer[fillBuffer][2] = txAdpcmState.index;
+                // Encode 58 samples → 29 bytes ADPCM
+                adpcmEncode(pcmBuffer, &txBuffer[fillBuffer][ADPCM_HEADER_SIZE],
+                            SAMPLES_PER_FRAME, &txAdpcmState);
+            }
         }
 
         bufferReady[fillBuffer] = true;
@@ -423,27 +551,55 @@ void playbackTask(void *param) {
             continue;
         }
 
+        bool useEncryption = (currentChannel == ENCRYPTED_CHANNEL);
+
         // Play from ring buffer once prefill threshold is reached
         if ((rxPlaying && rxCount > 0) || rxCount >= RX_PREFILL) {
             rxPlaying = true;
             uint8_t *pkt = rxRing[rxTail];
             int32_t currentGain = GAIN;
-
-            // Decode ADPCM header
-            ADPCMState rxState;
-            rxState.predicted = (int16_t)((pkt[0] << 8) | pkt[1]);
-            rxState.index = pkt[2];
-            if (rxState.index > 88) rxState.index = 88;
-
-            // Decode 29 bytes of 4-bit ADPCM → 58 PCM samples
             int16_t pcmOut[SAMPLES_PER_FRAME];
-            adpcmDecode(&pkt[ADPCM_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
+            int samplesOut = SAMPLES_PER_FRAME;
 
-            for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+            if (useEncryption) {
+                // --- DECRYPTION PATH (Channel 90) ---
+                uint8_t plaintext[ENC_PLAINTEXT_SIZE];
+                bool ok = decryptRadioPacket(pkt, plaintext);
+                if (!ok) {
+                    // Bad tag — discard packet, output silence
+                    Serial.println("[Radio] Decrypt FAIL — bad tag, packet discarded");
+                    memset(stereoBuf, 0, sizeof(stereoBuf));
+                    rxTail = (rxTail + 1) % RX_RING_SIZE;
+                    portENTER_CRITICAL(&rxCountMux);
+                    rxCount--;
+                    portEXIT_CRITICAL(&rxCountMux);
+                    i2s_write(I2S_NUM_0, stereoBuf, sizeof(stereoBuf), &bytes_written, portMAX_DELAY);
+                    continue;
+                }
+                ADPCMState rxState;
+                rxState.predicted = (int16_t)((plaintext[0] << 8) | plaintext[1]);
+                rxState.index = plaintext[2];
+                if (rxState.index > 88) rxState.index = 88;
+                // Decode 42 samples from 21 ADPCM bytes
+                adpcmDecode(&plaintext[ADPCM_HEADER_SIZE], pcmOut, ENC_SAMPLES_PER_FRAME, &rxState);
+                // Zero-pad remaining samples so I2S frame size stays consistent
+                memset(&pcmOut[ENC_SAMPLES_PER_FRAME], 0,
+                       (SAMPLES_PER_FRAME - ENC_SAMPLES_PER_FRAME) * sizeof(int16_t));
+                samplesOut = SAMPLES_PER_FRAME;
+            } else {
+                // --- UNENCRYPTED PATH ---
+                ADPCMState rxState;
+                rxState.predicted = (int16_t)((pkt[0] << 8) | pkt[1]);
+                rxState.index = pkt[2];
+                if (rxState.index > 88) rxState.index = 88;
+                adpcmDecode(&pkt[ADPCM_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
+                samplesOut = SAMPLES_PER_FRAME;
+            }
+
+            for (int i = 0; i < samplesOut; i++) {
                 int32_t sample = pcmOut[i];
                 sample = (sample * currentGain) >> 8;
                 sample = softLimiter(sample, LIMIT_POST);
-
                 int16_t out = (int16_t)sample;
                 stereoBuf[i * 2]     = out;
                 stereoBuf[i * 2 + 1] = out;
@@ -466,7 +622,7 @@ void playbackTask(void *param) {
             }
             digitalWrite(LED_PIN, LOW);
         }
-        // i2s_write paces playback naturally — blocking here does NOT affect radio reads
+        // i2s_write paces playback naturally
         i2s_write(I2S_NUM_0, stereoBuf, sizeof(stereoBuf), &bytes_written, portMAX_DELAY);
     }
 }
@@ -1111,6 +1267,7 @@ void usbHandshakeTask(void *param) {
 
 void setup() {
     Serial.begin(115200);
+    initRadioEncryption();  // Derive CH90 radio key & nonce (deterministic, same on all devices)
     // --- GPIO Setup ---
     pinMode(BUTTON, INPUT_PULLUP);
     pinMode(BTN_LEFT, INPUT_PULLUP);
