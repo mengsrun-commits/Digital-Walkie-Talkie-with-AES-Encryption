@@ -1,4 +1,3 @@
-typedef struct ADPCMState ADPCMState;
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -54,6 +53,7 @@ typedef struct ADPCMState ADPCMState;
 // =================================================================
 // 2. GLOBAL VARIABLES & STATES
 // =================================================================
+typedef struct ADPCMState ADPCMState;
 const char *PASSWORD = "password2";
 const char *DEVICE_NAME = "Device 2";
 String message = "Welcome Device 2!";
@@ -125,7 +125,7 @@ const uint8_t MIN_CHANNEL_VALUE = 80;
 //   [1-4]   : Packet counter (u32, plaintext) — forms per-packet GCM nonce suffix
 //   [5-27]  : AES-GCM ciphertext (23 bytes)
 //   [28-31] : Truncated GCM auth tag (4 bytes)
-const uint8_t ENCRYPTED_CHANNELS[] = {89, 91};
+const uint8_t ENCRYPTED_CHANNELS[] = {89, 90};
 const uint8_t ENCRYPTED_CHANNEL_COUNT = sizeof(ENCRYPTED_CHANNELS) / sizeof(ENCRYPTED_CHANNELS[0]);
 #define ENC_PACKET_TYPE 0xA5
 #define UNENC_PACKET_TYPE 0x5A
@@ -672,6 +672,7 @@ void playbackTask(void *param)
     size_t bytes_written;
     int16_t stereoBuf[SAMPLES_PER_FRAME * 2];
     uint8_t underrunCount = 0;
+    uint8_t lastPacketType = 0;
 
     while (1)
     {
@@ -682,6 +683,7 @@ void playbackTask(void *param)
         }
 
         int samplesOut = SAMPLES_PER_FRAME;
+        uint8_t packetType = 0;
 
         // Play from ring buffer once prefill threshold is reached
         if ((rxPlaying && rxCount > 0) || rxCount >= RX_PREFILL)
@@ -694,6 +696,7 @@ void playbackTask(void *param)
             bool isEncPkt = (pkt[0] == ENC_PACKET_TYPE);
             bool isUnencPkt = (pkt[0] == UNENC_PACKET_TYPE);
             bool channelEncrypted = isEncryptedChannel(currentChannel);
+            packetType = isEncPkt ? ENC_PACKET_TYPE : (isUnencPkt ? UNENC_PACKET_TYPE : 0);
 
             if (isEncPkt && channelEncrypted)
             {
@@ -741,7 +744,14 @@ void playbackTask(void *param)
             if (!decoded)
             {
                 // Unknown packet type or decrypt failure — output silence
-                memset(pcmOut, 0, samplesOut * sizeof(int16_t));
+                memset(pcmOut, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
+            }
+
+            if (packetType != lastPacketType)
+            {
+                // Reset DMA when switching packet types to avoid I2S lockups
+                i2s_zero_dma_buffer(I2S_NUM_0);
+                lastPacketType = packetType;
             }
 
             for (int i = 0; i < samplesOut; i++)
@@ -776,7 +786,7 @@ void playbackTask(void *param)
             digitalWrite(LED_PIN, LOW);
         }
         // i2s_write paces playback naturally
-        i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+        i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
     }
 }
 
