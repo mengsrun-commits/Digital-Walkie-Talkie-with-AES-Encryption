@@ -53,9 +53,11 @@
 // 2. GLOBAL VARIABLES & STATES
 // =================================================================
 typedef struct ADPCMState ADPCMState;
-const char *PASSWORD = "password2";
-const char *DEVICE_NAME = "Device 2";
-String message = "Welcome Device 2!";
+String devicePassword = "";
+String deviceName = "Walkie-Talkie";
+String message = "Welcome!";
+String radioPassword = "";
+bool devicePasswordEnabled = true;
 bool ready = false;
 bool sent = false;
 volatile bool isProgramMode = false;
@@ -66,7 +68,7 @@ bool hasDisplay = true;
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Preferences preferences;
-uint8_t savedChannel = 60;
+uint8_t savedChannel = 80;
 
 enum DisplayState
 {
@@ -118,7 +120,7 @@ const uint8_t MIN_CHANNEL_VALUE = 80;
 #define UNENC_ADPCM_DATA_BYTES (PACKET_SIZE - UNENC_HEADER_SIZE)
 #define SAMPLES_PER_FRAME (UNENC_ADPCM_DATA_BYTES * 2) // 56 samples per packet
 
-// --- Channel 90 AES-GCM Encryption ---
+// --- AES-GCM encrypted channels ---
 // Encrypted packet layout (32 bytes total):
 //   [0]     : Packet type (ENC_PACKET_TYPE)
 //   [1-4]   : Packet counter (u32, plaintext) — forms per-packet GCM nonce suffix
@@ -205,11 +207,9 @@ String b64encode(const unsigned char *input, size_t len)
 }
 
 // =================================================================
-// RADIO AES-GCM ENCRYPTION (Channel 90)
+// RADIO AES-GCM ENCRYPTION
 // =================================================================
-const char *RADIO_PASSWORD = "passwordEncryption";
-
-uint8_t radioKey[32];                  // AES-256 key (derived from RADIO_PASSWORD)
+uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
 uint8_t radioBaseNonce[8];             // 8-byte base; combined with counter → 12-byte GCM nonce
 volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
 uint8_t radioSessionNonce[8];          // per-PTT session nonce base
@@ -217,29 +217,30 @@ volatile bool sessionNonceValid = false;
 uint8_t txNoncePacket[PACKET_SIZE];
 volatile bool txNoncePending = false;
 
-// Derive radioKey and radioBaseNonce deterministically from RADIO_PASSWORD only.
-// This keeps radio encryption consistent across devices with different PASSWORD values.
+// Derive radioKey and radioBaseNonce deterministically from the stored radio password.
+// This keeps radio encryption consistent across devices with different login PASSWORD values.
 void initRadioEncryption()
 {
-    Serial.println("[Radio] Deriving CH90 encryption key from passwords...");
+    Serial.println("[Radio] Deriving channel encryption key from passwords...");
+    const char *storedRadioPassword = radioPassword.c_str();
 
-    // 1. Derive Radio Key: Key=RADIO_PASSWORD, Salt=SHA256(RADIO_PASSWORD + suffix)
+    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
     uint8_t radioSalt[32];
     char radioSaltInput[64];
-    snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", RADIO_PASSWORD);
+    snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", storedRadioPassword);
     mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
                radioSalt);
     mbedtls_pkcs5_pbkdf2_hmac_ext(
         MBEDTLS_MD_SHA256,
-        (const unsigned char *)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
+        (const unsigned char *)storedRadioPassword, strlen(storedRadioPassword),
         radioSalt, sizeof(radioSalt),
         5000, 32, radioKey);
 
-    // 2. Derive Nonce Base: Key=RADIO_PASSWORD, Salt=SHA256(RADIO_PASSWORD + suffix)
+    // 2. Derive Nonce Base: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
     uint8_t nonceSalt[32];
     char nonceSaltInput[64];
-    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|radio_salt_nonce", RADIO_PASSWORD);
+    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|radio_salt_nonce", storedRadioPassword);
     mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                (const unsigned char *)nonceSaltInput, strlen(nonceSaltInput),
                nonceSalt);
@@ -247,12 +248,12 @@ void initRadioEncryption()
     uint8_t nonceBuf[32];
     mbedtls_pkcs5_pbkdf2_hmac_ext(
         MBEDTLS_MD_SHA256,
-        (const unsigned char *)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
+        (const unsigned char *)storedRadioPassword, strlen(storedRadioPassword),
         nonceSalt, sizeof(nonceSalt),
         1000, 32, nonceBuf);
     memcpy(radioBaseNonce, nonceBuf, 8);
 
-    Serial.println("[Radio] CH90 encryption ready (Password-derived).");
+    Serial.println("[Radio] Channel encryption ready (Password-derived).");
 }
 
 // Encrypt ENC_PLAINTEXT_SIZE bytes into a 32-byte radio packet.
@@ -922,7 +923,7 @@ void buttonTask(void *param)
                 }
                 sessionNonceValid = true;
                 txPacketCounter = 0;
-                
+
                 memset(txNoncePacket, 0, PACKET_SIZE);
                 txNoncePacket[0] = NONCE_PACKET_TYPE;
                 memcpy(&txNoncePacket[1], radioSessionNonce, 8);
@@ -1315,7 +1316,7 @@ void OLEDTask(void *parameter)
             {
                 char chText[16];
                 snprintf(chText, sizeof(chText), "CH %d", currentChannel);
-                
+
                 // Draw channel text centered with size 2
                 drawCenteredText(chText, 2);
 
@@ -1567,6 +1568,88 @@ void usbHandshakeTask(void *param)
                     displayState = STATE_LOGGED_IN;
                     Serial.println("Login confirmation received.");
                 }
+                else if (msg.startsWith("device_password_b64:"))
+                {
+                    String encodedPassword = msg.substring(strlen("device_password_b64:"));
+                    unsigned char decodedPassword[128];
+                    size_t decodedLength = 0;
+                    int decodeResult = mbedtls_base64_decode(
+                        decodedPassword,
+                        sizeof(decodedPassword) - 1,
+                        &decodedLength,
+                        (const unsigned char *)encodedPassword.c_str(),
+                        encodedPassword.length());
+
+                    if (decodeResult == 0 && decodedLength > 0)
+                    {
+                        decodedPassword[decodedLength] = '\0';
+                        devicePassword = String((char *)decodedPassword);
+                        preferences.putString("device_pwd", devicePassword);
+                        Serial.println("Device password stored.");
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store device password.");
+                    }
+                }
+                else if (msg.startsWith("device_name_b64:"))
+                {
+                    String encodedName = msg.substring(strlen("device_name_b64:"));
+                    unsigned char decodedName[128];
+                    size_t decodedLength = 0;
+                    int decodeResult = mbedtls_base64_decode(
+                        decodedName,
+                        sizeof(decodedName) - 1,
+                        &decodedLength,
+                        (const unsigned char *)encodedName.c_str(),
+                        encodedName.length());
+
+                    if (decodeResult == 0 && decodedLength > 0)
+                    {
+                        decodedName[decodedLength] = '\0';
+                        deviceName = String((char *)decodedName);
+                        message = "Welcome " + deviceName + "!";
+                        preferences.putString("device_name", deviceName);
+                        Serial.println("Device name stored.");
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store device name.");
+                    }
+                }
+                else if (msg.startsWith("device_password_enabled:"))
+                {
+                    String enabledValue = msg.substring(strlen("device_password_enabled:"));
+                    enabledValue.trim();
+                    devicePasswordEnabled = enabledValue == "1";
+                    preferences.putBool("pwd_enabled", devicePasswordEnabled);
+                    Serial.println("Device password setting stored.");
+                }
+                else if (msg.startsWith("radio_password_b64:"))
+                {
+                    String encodedPassword = msg.substring(strlen("radio_password_b64:"));
+                    unsigned char decodedPassword[128];
+                    size_t decodedLength = 0;
+                    int decodeResult = mbedtls_base64_decode(
+                        decodedPassword,
+                        sizeof(decodedPassword) - 1,
+                        &decodedLength,
+                        (const unsigned char *)encodedPassword.c_str(),
+                        encodedPassword.length());
+
+                    if (decodeResult == 0 && decodedLength > 0)
+                    {
+                        decodedPassword[decodedLength] = '\0';
+                        radioPassword = String((char *)decodedPassword);
+                        preferences.putString("radio_pwd", radioPassword);
+                        initRadioEncryption();
+                        Serial.println("Radio password stored.");
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store radio password.");
+                    }
+                }
             }
 
             // Heartbeat Timeout Logic
@@ -1606,10 +1689,11 @@ void usbHandshakeTask(void *param)
                 unsigned char key[32];
 
                 Serial.println("Computing PBKDF2...");
+                String activeDevicePassword = devicePasswordEnabled ? devicePassword : "";
                 mbedtls_pkcs5_pbkdf2_hmac_ext(
                     MBEDTLS_MD_SHA256,
-                    (const unsigned char *)PASSWORD,
-                    strlen(PASSWORD),
+                    (const unsigned char *)activeDevicePassword.c_str(),
+                    activeDevicePassword.length(),
                     salt,
                     16,
                     10000,
@@ -1639,7 +1723,8 @@ void usbHandshakeTask(void *param)
 
                 StaticJsonDocument<512> out;
 
-                out["device"] = DEVICE_NAME;
+                out["device"] = deviceName;
+                out["password_enabled"] = devicePasswordEnabled;
                 out["salt"] = b64encode(salt, 16);
                 out["nonce"] = b64encode(nonce, 12);
                 out["ciphertext"] = b64encode(ciphertext, message.length());
@@ -1681,7 +1766,13 @@ void usbHandshakeTask(void *param)
 void setup()
 {
     Serial.begin(115200);
-    initRadioEncryption(); // Derive CH90 radio key & nonce (deterministic, same on all devices)
+    preferences.begin("walkie", false);
+    deviceName = preferences.getString("device_name", "Walkie-Talkie");
+    message = "Welcome " + deviceName + "!";
+    devicePassword = preferences.getString("device_pwd", "");
+    devicePasswordEnabled = preferences.getBool("pwd_enabled", true);
+    radioPassword = preferences.getString("radio_pwd", "");
+    initRadioEncryption(); // Derive radio key & nonce from the stored radio password.
     // --- GPIO Setup ---
     pinMode(BUTTON, INPUT_PULLUP);
     pinMode(BTN_LEFT, INPUT_PULLUP);
@@ -1720,10 +1811,9 @@ void setup()
     startupTime = millis();
 
     // --- Preferences Setup ---
-    preferences.begin("walkie", false);
-    currentChannel = preferences.getUChar("channel", 60);
+    currentChannel = preferences.getUChar("channel", MIN_CHANNEL_VALUE);
     if (currentChannel < MIN_CHANNEL_VALUE || currentChannel > MAX_CHANNEL_VALUE)
-        currentChannel = 60;
+        currentChannel = MIN_CHANNEL_VALUE;
     savedChannel = currentChannel;
 
     // --- SPI Radio Setup ---
@@ -1734,7 +1824,7 @@ void setup()
     radio.setChannel(currentChannel);
     radio.setCRCLength(RF24_CRC_8);
     radio.disableDynamicPayloads();
-    radio.setAutoAck(false);
+    radio.setAutoAck(false); //Best effort delivery
     radio.openWritingPipe(SHARED_ADDRESS);
     radio.openReadingPipe(1, SHARED_ADDRESS);
     radio.startListening();

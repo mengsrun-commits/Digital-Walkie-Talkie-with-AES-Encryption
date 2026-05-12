@@ -45,10 +45,23 @@ class MyApp(QWidget):
 
     def show_program_page(self, from_preview=False):
         self.program_page.set_back_mode(from_preview)
+        self.program_page.reload_channel_config()
+        if from_preview:
+            self.program_page.set_device_name("Walkie-Talkie Device")
+            self.program_page.set_upload_port("")
+        else:
+            selected_port = self.login_page._selected_port()
+            self.program_page.set_device_name(self.login_page._format_device_label(selected_port))
+            self.program_page.set_upload_port(selected_port)
+            self.login_page.stop_connection()
+
         # Ensure ProgramPage UI is reset when entering
+        self.program_page.header_widget.show()
         self.program_page.content_widget.show()
         self.program_page.back_button.show()
+        self.program_page.set_configuration_button.show()
         self.program_page.disconnect_label.hide()
+        self.program_page._apply_preview_mode()
         
         self.stack.setCurrentWidget(self.program_page)
         QTimer.singleShot(0, self.login_page.clear_credentials)

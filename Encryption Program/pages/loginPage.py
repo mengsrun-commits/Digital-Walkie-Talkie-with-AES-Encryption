@@ -121,6 +121,13 @@ class LoginApp(QWidget):
         if hasattr(self, 'waiting_pulse'):
             self.waiting_pulse.stop()
 
+        for connection in self.serial_connections.values():
+            try:
+                if connection.is_open:
+                    connection.close()
+            except Exception:
+                pass
+
     def _setup_serial_reader(self):
         self.serial_read_timer = QTimer(self)
         self.serial_read_timer.setInterval(100)  # fast polling
@@ -141,6 +148,11 @@ class LoginApp(QWidget):
         if device_name:
             return f"{port} ({device_name})"
         return port
+
+    def _device_password_enabled(self) -> bool:
+        if isinstance(self.latest_packet, dict):
+            return bool(self.latest_packet.get("password_enabled", True))
+        return True
     
     def _send_ready(self, port):
         connection = self.serial_connections.get(port)
@@ -521,6 +533,10 @@ class LoginApp(QWidget):
                 self._show_connecting_screen()
         
     def start_serial_connection_worker(self):
+        if hasattr(self, 'serial_worker') and self.serial_worker.isRunning():
+            print("Serial connection worker is already running.")
+            return
+
         self.serial_worker = SerialConnectionWorker()
         self.serial_worker.connected.connect(self.on_serial_connected)
         self.serial_worker.start()
@@ -529,7 +545,7 @@ class LoginApp(QWidget):
     def on_login(self):
         password = self.password_input.text().strip()
 
-        if not password:
+        if not password and self._device_password_enabled():
             QMessageBox.warning(self, "Missing Input", "Please enter the Encryption Key.")
             return
 
