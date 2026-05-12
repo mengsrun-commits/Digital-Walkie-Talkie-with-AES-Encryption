@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import (
 	QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget,
 	QListWidgetItem, QCheckBox, QLineEdit, QGroupBox, QFormLayout, QSizePolicy,
-	QMessageBox, QInputDialog, QDialog, QDialogButtonBox
+	QMessageBox, QInputDialog, QDialog, QDialogButtonBox, QToolButton
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QProcess
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QPointF
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPen, QColor
 from pathlib import Path
 import base64
 import re
@@ -32,12 +32,19 @@ class ProgramPage(QWidget):
 		self._saved_encrypted_channels = set()
 		self._updating_channels = False
 		self._upload_port = ""
-		self._flash_process = None
+		self._serial_connection = None
 		self._pending_radio_password = ""
 		self._pending_device_name = ""
 		self._pending_device_password = ""
-		self._pending_device_password_enabled = True
 		self._settings_dirty = False
+		self._unsaved_channel_notice_shown = False
+		self._unsaved_settings_notice_shown = False
+		self._status_clear_timer = QTimer(self)
+		self._status_clear_timer.setSingleShot(True)
+		self._status_clear_timer.timeout.connect(self._clear_channel_status)
+		self._heartbeat_timer = QTimer(self)
+		self._heartbeat_timer.setInterval(1000)
+		self._heartbeat_timer.timeout.connect(self._send_heartbeat)
 		self._build_ui()
 
 	def _build_ui(self):
@@ -162,37 +169,59 @@ class ProgramPage(QWidget):
 	def set_upload_port(self, port: str):
 		self._upload_port = (port or "").strip()
 
-	def reload_channel_config(self):
-		self._min_channel, self._max_channel, self._encrypted_channels = self._read_ino_channel_config()
+	def set_serial_connection(self, connection):
+		self._serial_connection = connection
+		if connection and getattr(connection, "is_open", False) and not self._is_preview:
+			self._heartbeat_timer.start()
+		else:
+			self._heartbeat_timer.stop()
+
+	def stop_serial_activity(self):
+		self._heartbeat_timer.stop()
+
+	def set_device_password(self, device_password: str):
+		clean_password = (device_password or "").strip()
+		if clean_password:
+			self._pending_device_password = clean_password
+
+	def set_encrypted_channels(self, channels):
+		self._encrypted_channels = {
+			int(channel)
+			for channel in channels or []
+			if self._min_channel <= int(channel) <= self._max_channel
+		}
 		self._saved_encrypted_channels = set(self._encrypted_channels)
 		self._populate_channel_list()
+
+	def reload_channel_config(self):
+		self._min_channel, self._max_channel = self._read_ino_channel_config()
+		self._encrypted_channels = set()
+		self._saved_encrypted_channels = set()
+		self._populate_channel_list()
+
+	def load_preview_data(self):
+		self._min_channel = 80
+		self._max_channel = 90
+		self._encrypted_channels = {80, 83, 88}
+		self._saved_encrypted_channels = set(self._encrypted_channels)
+		self._populate_channel_list()
+		self._set_channel_status("Preview mode: showing sample data.")
 
 	def _read_ino_channel_config(self):
 		if not self.INO_PATH.exists():
 			self.channel_status_label.setText(f"Could not find sketch: {self.INO_PATH}")
-			return self.DEFAULT_MIN_CHANNEL, self.DEFAULT_MAX_CHANNEL, set()
+			return self.DEFAULT_MIN_CHANNEL, self.DEFAULT_MAX_CHANNEL
 
 		source = self.INO_PATH.read_text(encoding="utf-8")
 		min_channel = self._read_uint8_constant(source, "MIN_CHANNEL_VALUE", self.DEFAULT_MIN_CHANNEL)
 		max_channel = self._read_uint8_constant(source, "MAX_CHANNEL_VALUE", self.DEFAULT_MAX_CHANNEL)
-		encrypted_channels = self._read_encrypted_channels(source, min_channel, max_channel)
-		return min_channel, max_channel, encrypted_channels
+		return min_channel, max_channel
 
 	def _read_uint8_constant(self, source: str, name: str, fallback: int):
 		match = re.search(rf"const\s+uint8_t\s+{name}\s*=\s*(\d+)\s*;", source)
 		if not match:
 			return fallback
 		return int(match.group(1))
-
-	def _read_encrypted_channels(self, source: str, min_channel: int, max_channel: int):
-		match = re.search(r"const\s+uint8_t\s+ENCRYPTED_CHANNELS\[\]\s*=\s*\{([^}]*)\}\s*;", source, re.DOTALL)
-		if not match:
-			return set()
-		return {
-			int(value)
-			for value in re.findall(r"\d+", match.group(1))
-			if min_channel <= int(value) <= max_channel
-		}
 
 	def _populate_channel_list(self):
 		self._updating_channels = True
@@ -209,7 +238,7 @@ class ProgramPage(QWidget):
 
 		self._updating_channels = False
 		self._sync_encryption_checkbox()
-		self.channel_status_label.clear()
+		self._clear_channel_status()
 		self._update_set_configuration_button()
 
 	def _set_channel_item_text(self, item: QListWidgetItem, channel_number: int):
@@ -246,7 +275,12 @@ class ProgramPage(QWidget):
 		self._set_channel_item_text(item, channel_number)
 		self._updating_channels = False
 		self._update_set_configuration_button()
-		self._set_channel_status("Unsaved channel changes. Click Set Configuration to upload them.")
+		if not self._unsaved_channel_notice_shown:
+			self._unsaved_channel_notice_shown = True
+			self._set_channel_status(
+				"Unsaved channel changes. Click Save Configuration to store them.",
+				timeout_ms=4000,
+			)
 
 	def _sync_encryption_checkbox(self):
 		current = self.channel_list.currentItem()
@@ -260,75 +294,23 @@ class ProgramPage(QWidget):
 			self.enable_encryption_checkbox.setChecked(False)
 		self._updating_channels = False
 
-	def _write_encrypted_channels_to_ino(self, channels=None):
-		if not self.INO_PATH.exists():
-			self._set_channel_status(f"Could not save. Sketch not found: {self.INO_PATH}", is_error=True)
-			return False
-
-		source = self.INO_PATH.read_text(encoding="utf-8")
-		if channels is None:
-			channels = self._encrypted_channels
-
-		channels = sorted(
-			channel
-			for channel in channels
-			if self._min_channel <= channel <= self._max_channel
-		)
-		channel_list = ", ".join(str(channel) for channel in channels)
-		replacement = f"const uint8_t ENCRYPTED_CHANNELS[] = {{{channel_list}}};"
-		updated_source, replacements = re.subn(
-			r"const\s+uint8_t\s+ENCRYPTED_CHANNELS\[\]\s*=\s*\{[^}]*\}\s*;",
-			replacement,
-			source,
-			count=1,
-			flags=re.DOTALL,
-		)
-
-		if replacements != 1:
-			self._set_channel_status("Could not save. ENCRYPTED_CHANNELS[] was not found in the sketch.", is_error=True)
-			return False
-
-		self.INO_PATH.write_text(updated_source, encoding="utf-8")
-		encrypted_count = len(channels)
-		plural = "" if encrypted_count == 1 else "s"
-		self._set_channel_status(f"Saved {encrypted_count} encrypted channel{plural} to the sketch.")
-		return True
-
 	def _has_unsaved_changes(self):
 		return self._encrypted_channels != self._saved_encrypted_channels or self._settings_dirty
 
 	def _update_set_configuration_button(self):
-		if self._flash_process and self._flash_process.state() != QProcess.ProcessState.NotRunning:
-			self.set_configuration_button.setEnabled(False)
-			self.set_configuration_button.setText("Uploading Configuration...")
-			return
-
 		self.set_configuration_button.setEnabled(True)
-		if self._has_unsaved_changes():
-			self.set_configuration_button.setText("Set Configuration")
-		else:
-			self.set_configuration_button.setText("Set Configuration")
+		self.set_configuration_button.setText("Save Configuration")
 
 	def _save_pending_changes(self):
-		if self._settings_dirty:
-			self._on_set_configuration_clicked()
-			return False
-
-		if not self._write_encrypted_channels_to_ino():
-			return False
-
-		self._saved_encrypted_channels = set(self._encrypted_channels)
-		self._update_set_configuration_button()
-		return True
+		return self._on_set_configuration_clicked()
 
 	def _discard_pending_changes(self):
 		self._encrypted_channels = set(self._saved_encrypted_channels)
 		self._settings_dirty = False
 		self._pending_device_name = self._device_name
-		self._pending_device_password = ""
 		self.title.setText(self._device_name)
 		self._populate_channel_list()
-		self.channel_status_label.clear()
+		self._clear_channel_status()
 
 	def _confirm_unsaved_changes(self):
 		if not self._has_unsaved_changes():
@@ -337,7 +319,7 @@ class ProgramPage(QWidget):
 		message_box = QMessageBox(self)
 		message_box.setWindowTitle("Unsaved Changes")
 		message_box.setText("You have unsaved configuration changes.")
-		message_box.setInformativeText("Save changes to the sketch before leaving?")
+		message_box.setInformativeText("Save changes to the ESP32 before leaving?")
 		save_button = message_box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
 		discard_button = message_box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
 		message_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -355,33 +337,29 @@ class ProgramPage(QWidget):
 		if self._is_preview:
 			return
 
-		if self._flash_process and self._flash_process.state() != QProcess.ProcessState.NotRunning:
-			return
-
 		if not self._upload_port:
 			self._set_channel_status("No ESP32 upload port selected. Log in with a connected device before setting configuration.", is_error=True)
-			return
+			return False
 
-		radio_password, accepted = QInputDialog.getText(
-			self,
-			"Radio Password",
-			"Set password to generate encryption key",
-			QLineEdit.EchoMode.Password,
-		)
-		if not accepted:
-			return
+		channels_changed = self._encrypted_channels != self._saved_encrypted_channels
+		if channels_changed and self._encrypted_channels:
+			radio_password, accepted = QInputDialog.getText(
+				self,
+				"Radio Password",
+				"Set password to generate encryption key",
+				QLineEdit.EchoMode.Password,
+			)
+			if not accepted:
+				return False
 
-		radio_password = radio_password.strip()
-		if not radio_password:
-			self._set_channel_status("Radio password is required to generate the encryption key.", is_error=True)
-			return
-		self._pending_radio_password = radio_password
+			radio_password = radio_password.strip()
+			if not radio_password:
+				self._set_channel_status("Radio password is required when encrypted channels are enabled.", is_error=True)
+				return False
+			self._pending_radio_password = radio_password
 
-		if not self._write_encrypted_channels_to_ino():
-			return
-
-		self._set_channel_status("Uploading configuration to ESP32...")
-		self._start_flash_process()
+		self._set_channel_status("Saving configuration to ESP32 Preferences...")
+		return self._store_configuration_on_device()
 
 	def _open_settings_dialog(self):
 		if self._is_preview:
@@ -395,18 +373,30 @@ class ProgramPage(QWidget):
 		device_name_input = QLineEdit()
 		device_name_input.setText(self._pending_device_name or self._device_name)
 
-		password_enabled_checkbox = QCheckBox("Enable device password")
-		password_enabled_checkbox.setChecked(self._pending_device_password_enabled)
-
 		device_password_input = QLineEdit()
 		device_password_input.setPlaceholderText("Set device password")
+		device_password_input.setText(self._pending_device_password)
 		device_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-		device_password_input.setEnabled(password_enabled_checkbox.isChecked())
-		password_enabled_checkbox.toggled.connect(device_password_input.setEnabled)
+
+		password_toggle = QToolButton()
+		password_toggle.setCheckable(True)
+		password_toggle.setAutoRaise(True)
+		password_toggle.setFixedSize(34, 34)
+		password_toggle.setIconSize(QSize(20, 20))
+		password_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+		password_toggle.setIcon(self._make_eye_icon())
+		password_toggle.setToolTip("Show or hide device password")
+		password_toggle.toggled.connect(
+			lambda checked: self._toggle_password_visibility(checked, device_password_input, password_toggle)
+		)
+
+		password_row = QHBoxLayout()
+		password_row.setSpacing(8)
+		password_row.addWidget(device_password_input)
+		password_row.addWidget(password_toggle)
 
 		form.addRow("Change device name:", device_name_input)
-		form.addRow("", password_enabled_checkbox)
-		form.addRow("Set device password:", device_password_input)
+		form.addRow("Set device password:", password_row)
 		layout.addLayout(form)
 
 		buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -422,111 +412,161 @@ class ProgramPage(QWidget):
 			self._set_channel_status("Device name cannot be empty.", is_error=True)
 			return
 
-		device_password_enabled = password_enabled_checkbox.isChecked()
 		device_password = device_password_input.text().strip()
-		if device_password_enabled and not device_password:
-			self._set_channel_status("Device password is required when password login is enabled.", is_error=True)
+		if not device_password:
+			self._set_channel_status("Device password cannot be empty.", is_error=True)
 			return
 
 		self._pending_device_name = device_name
-		self._pending_device_password_enabled = device_password_enabled
 		self._pending_device_password = device_password
 		self._settings_dirty = True
 		self.title.setText(device_name)
-		self._set_channel_status("Unsaved settings changes. Click Set Configuration to upload them.")
+		if not self._unsaved_settings_notice_shown:
+			self._unsaved_settings_notice_shown = True
+			self._set_channel_status(
+				"Unsaved settings changes. Click Save Configuration to store them.",
+				timeout_ms=4000,
+			)
 
-	def _start_flash_process(self):
-		args = [
-			"compile",
-			"--upload",
-			"--fqbn",
-			self.ARDUINO_FQBN,
-		]
-		if self._upload_port:
-			args.extend(["--port", self._upload_port])
-		args.append(str(self.SKETCH_DIR))
-
-		self._flash_process = QProcess(self)
-		self._flash_process.setProgram("arduino-cli")
-		self._flash_process.setArguments(args)
-		self._flash_process.readyReadStandardOutput.connect(self._on_flash_output)
-		self._flash_process.readyReadStandardError.connect(self._on_flash_output)
-		self._flash_process.finished.connect(self._on_flash_finished)
-		self._flash_process.errorOccurred.connect(self._on_flash_error)
-		self._flash_process.start()
-		self._update_set_configuration_button()
-
-	def _on_flash_output(self):
-		if not self._flash_process:
-			return
-
-		output = bytes(self._flash_process.readAllStandardOutput()).decode(errors="ignore").strip()
-		error_output = bytes(self._flash_process.readAllStandardError()).decode(errors="ignore").strip()
-		latest_line = ""
-		if output:
-			latest_line = output.splitlines()[-1]
-		if error_output:
-			latest_line = error_output.splitlines()[-1]
-		if latest_line:
-			self._set_channel_status(latest_line)
-
-	def _on_flash_finished(self, exit_code: int, _exit_status):
-		if exit_code == 0:
-			self._saved_encrypted_channels = set(self._encrypted_channels)
-			self._set_channel_status("Firmware uploaded. Storing settings...")
-			QTimer.singleShot(2500, self._store_configuration_on_device)
+	def _toggle_password_visibility(self, checked: bool, input_field: QLineEdit, toggle_button: QToolButton):
+		if checked:
+			input_field.setEchoMode(QLineEdit.EchoMode.Normal)
+			toggle_button.setIcon(self._make_eye_icon(slashed=True))
 		else:
-			self._set_channel_status("Upload failed. Check Arduino CLI, board package, USB port, and ESP32 boot mode.", is_error=True)
-		self._update_set_configuration_button()
+			input_field.setEchoMode(QLineEdit.EchoMode.Password)
+			toggle_button.setIcon(self._make_eye_icon())
 
-	def _on_flash_error(self, _error):
-		self._set_channel_status("Could not start arduino-cli. Install Arduino CLI or add it to PATH.", is_error=True)
-		self._update_set_configuration_button()
+	def _make_eye_icon(self, slashed: bool = False):
+		pixmap = QPixmap(22, 22)
+		pixmap.fill(Qt.GlobalColor.transparent)
+
+		painter = QPainter(pixmap)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		pen = QPen(QColor("#667085"), 1.7)
+		pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+		painter.setPen(pen)
+		painter.setBrush(Qt.BrushStyle.NoBrush)
+		painter.drawEllipse(QPointF(11, 11), 7.4, 4.8)
+		painter.setBrush(QColor("#667085"))
+		painter.drawEllipse(QPointF(11, 11), 2.2, 2.2)
+
+		if slashed:
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.drawLine(5, 17, 17, 5)
+
+		painter.end()
+		return QIcon(pixmap)
 
 	def _store_configuration_on_device(self):
-		if not self._pending_radio_password:
-			self._set_channel_status("Configuration uploaded to ESP32.")
-			return
-
 		try:
-			with serial.Serial(self._upload_port, 115200, timeout=1) as connection:
+			self._heartbeat_timer.stop()
+			connection = self._serial_connection
+			opened_here = False
+			if not connection or not connection.is_open:
+				connection = serial.Serial(self._upload_port, 115200, timeout=1)
+				opened_here = True
 				time.sleep(2)
+
+			try:
+				if connection.in_waiting:
+					connection.reset_input_buffer()
+
 				if self._settings_dirty:
 					encoded_name = base64.b64encode(self._pending_device_name.encode()).decode()
-					connection.write(f"device_name_b64:{encoded_name}\n".encode())
-					connection.flush()
-					time.sleep(0.1)
-
-					connection.write(f"device_password_enabled:{1 if self._pending_device_password_enabled else 0}\n".encode())
-					connection.flush()
-					time.sleep(0.1)
+					confirmed, replies = self._send_serial_command(connection, f"device_name_b64:{encoded_name}", "Device name stored.")
+					if not confirmed:
+						self._set_channel_status(self._format_serial_failure("Device name", replies), is_error=True)
+						return False
 
 					if self._pending_device_password:
 						encoded_device_password = base64.b64encode(self._pending_device_password.encode()).decode()
-						connection.write(f"device_password_b64:{encoded_device_password}\n".encode())
-						connection.flush()
-						time.sleep(0.1)
+						confirmed, replies = self._send_serial_command(connection, f"device_password_b64:{encoded_device_password}", "Device password stored.")
+						if not confirmed:
+							self._set_channel_status(self._format_serial_failure("Device password", replies), is_error=True)
+							return False
 
-				encoded_radio_password = base64.b64encode(self._pending_radio_password.encode()).decode()
-				connection.write(f"radio_password_b64:{encoded_radio_password}\n".encode())
-				connection.flush()
-				time.sleep(0.3)
+				if self._pending_radio_password:
+					encoded_radio_password = base64.b64encode(self._pending_radio_password.encode()).decode()
+					confirmed, replies = self._send_serial_command(connection, f"radio_password_b64:{encoded_radio_password}", "Radio password stored.")
+					if not confirmed:
+						self._set_channel_status(self._format_serial_failure("Radio password", replies), is_error=True)
+						return False
+
+				channel_list = ",".join(str(channel) for channel in sorted(self._encrypted_channels))
+				confirmed, replies = self._send_serial_command(connection, f"encrypted_channels:{channel_list}", "Encrypted channels stored.")
+				if not confirmed:
+					message = self._format_serial_failure("Encrypted channels", replies)
+					self._set_channel_status(f"{message} Flash the updated firmware once, then try again.", is_error=True)
+					return False
+			finally:
+				if opened_here:
+					connection.close()
+				elif self._serial_connection and self._serial_connection.is_open and not self._is_preview:
+					self._heartbeat_timer.start()
 		except serial.SerialException as exc:
-			self._set_channel_status(f"Firmware uploaded, but Preferences could not be updated: {exc}", is_error=True)
-			return
+			self._set_channel_status(f"Preferences could not be updated: {exc}", is_error=True)
+			return False
 
 		self._pending_radio_password = ""
-		self._pending_device_password = ""
 		self._settings_dirty = False
-		self._set_channel_status("Configuration uploaded and settings stored in ESP32 Preferences.")
+		self._device_name = self._pending_device_name or self._device_name
+		self._saved_encrypted_channels = set(self._encrypted_channels)
+		self._update_set_configuration_button()
+		self._set_channel_status("Configuration saved to ESP32 Preferences.", timeout_ms=4000)
+		return True
 
-	def _set_channel_status(self, message: str, is_error: bool = False):
+	def _send_serial_command(self, connection, command: str, expected_reply: str, timeout: float = 5.0):
+		replies = []
+		for _attempt in range(3):
+			if connection.in_waiting:
+				connection.reset_input_buffer()
+			connection.write(f"{command}\n".encode())
+			connection.flush()
+			deadline = time.monotonic() + timeout
+			while time.monotonic() < deadline:
+				if connection.in_waiting:
+					reply = connection.readline().decode(errors="ignore").strip()
+					if reply:
+						replies.append(reply)
+						if expected_reply in reply:
+							return True, replies
+				time.sleep(0.05)
+		return False, replies
+
+	def _send_heartbeat(self):
+		connection = self._serial_connection
+		if self._is_preview or not connection or not connection.is_open:
+			self._heartbeat_timer.stop()
+			return
+
+		try:
+			connection.write(b"heartbeat\n")
+			connection.flush()
+		except serial.SerialException:
+			self._heartbeat_timer.stop()
+			self._set_channel_status("Lost serial connection to ESP32.", is_error=True)
+
+	def _format_serial_failure(self, setting_name: str, replies: list[str]):
+		if replies:
+			return f"{setting_name} was not confirmed by the ESP32. Last reply: {replies[-1]}"
+		return f"{setting_name} was not confirmed by the ESP32. No serial reply was received."
+
+	def _set_channel_status(self, message: str, is_error: bool = False, timeout_ms: int | None = None):
+		self._status_clear_timer.stop()
 		color = "#b00020" if is_error else "#1f6f43"
 		self.channel_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 		self.channel_status_label.setText(message)
+		if timeout_ms:
+			self._status_clear_timer.start(timeout_ms)
+
+	def _clear_channel_status(self):
+		self._status_clear_timer.stop()
+		self.channel_status_label.clear()
 
 	def set_back_mode(self, is_preview: bool):
 		self._is_preview = is_preview
+		self._unsaved_channel_notice_shown = False
+		self._unsaved_settings_notice_shown = False
 		if is_preview:
 			self.back_button.setText("Back to start")
 		else:
@@ -539,13 +579,14 @@ class ProgramPage(QWidget):
 		self.set_configuration_button.setEnabled(not self._is_preview)
 		if self._is_preview:
 			self.set_configuration_button.setText("Preview Mode")
-			self.channel_status_label.clear()
+			self._clear_channel_status()
 		else:
 			self._sync_encryption_checkbox()
 			self._update_set_configuration_button()
 
 	def show_disconnect_and_exit(self):
 		"""Show disconnect message and redirect to start page after a delay."""
+		self.stop_serial_activity()
 		self.content_widget.hide()
 		self.header_widget.hide()
 		self.set_configuration_button.hide()
@@ -557,10 +598,12 @@ class ProgramPage(QWidget):
 		if not self._confirm_unsaved_changes():
 			return
 
+		self.stop_serial_activity()
 		if self._is_preview:
 			self.back_to_start.emit()
 		else:
 			self.back_to_login.emit()
 		
 	def _on_back_to_start_clicked(self):
+		self.stop_serial_activity()
 		self.back_to_start.emit()

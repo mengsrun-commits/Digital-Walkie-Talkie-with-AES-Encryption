@@ -68,6 +68,7 @@ class LoginApp(QWidget):
         self._updating_devices = False
         self.latest_packets = {}
         self.latest_packet = None
+        self.last_device_password = ""
         self.setMinimumWidth(400)
         self._services_started = False
         self.setup_ui()
@@ -90,6 +91,10 @@ class LoginApp(QWidget):
         # Check if we already have active connections
         active_ports = [p for p, c in self.serial_connections.items() if c.is_open]
         if active_ports:
+            for port in active_ports:
+                self.latest_packets.pop(port, None)
+            self.latest_packet = None
+
             # Re-trigger handshake for each existing port to ensure fresh data
             for port in active_ports:
                 print(f"Re-triggering READY handshake for {port}...")
@@ -102,7 +107,7 @@ class LoginApp(QWidget):
         # No active ports, start search
         self.start_serial_connection_worker()
 
-    def stop_connection(self):
+    def stop_connection(self, close_connections=True):
         self._services_started = False
         
         if hasattr(self, 'serial_worker') and self.serial_worker.isRunning():
@@ -121,12 +126,13 @@ class LoginApp(QWidget):
         if hasattr(self, 'waiting_pulse'):
             self.waiting_pulse.stop()
 
-        for connection in self.serial_connections.values():
-            try:
-                if connection.is_open:
-                    connection.close()
-            except Exception:
-                pass
+        if close_connections:
+            for connection in self.serial_connections.values():
+                try:
+                    if connection.is_open:
+                        connection.close()
+                except Exception:
+                    pass
 
     def _setup_serial_reader(self):
         self.serial_read_timer = QTimer(self)
@@ -544,10 +550,20 @@ class LoginApp(QWidget):
 
     def on_login(self):
         password = self.password_input.text().strip()
+        password_configured = self._device_password_enabled()
+        pending_device_password = ""
 
-        if not password and self._device_password_enabled():
-            QMessageBox.warning(self, "Missing Input", "Please enter the Encryption Key.")
-            return
+        if password_configured:
+            if not password:
+                QMessageBox.warning(self, "Missing Input", "Please enter the Encryption Key.")
+                return
+            effective_password = password
+        else:
+            if not password:
+                QMessageBox.warning(self, "Missing Input", "No device password is set. Please create one to continue.")
+                return
+            pending_device_password = password
+            effective_password = ""
 
         if not self.latest_packet:
             self.status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -568,7 +584,7 @@ class LoginApp(QWidget):
             iterations=10000
         )
 
-        key = kdf.derive(password.encode())
+        key = kdf.derive(effective_password.encode())
 
         try:
             cipher = Cipher(
@@ -582,11 +598,18 @@ class LoginApp(QWidget):
             print("\n✅ Correct password!")
             print("Decrypted message:", plaintext.decode())
 
+            self.last_device_password = pending_device_password or password
+
             # Notify ESP32 of successful login
             selected_port = self._selected_port()
             conn = self.serial_connections.get(selected_port)
             if conn and conn.is_open:
                 try:
+                    if pending_device_password:
+                        encoded_device_password = base64.b64encode(pending_device_password.encode()).decode()
+                        conn.write(f"device_password_b64:{encoded_device_password}\n".encode())
+                        conn.flush()
+                        time.sleep(0.1)
                     conn.write(b"login_ok\n")
                     print(f"Sent LOGIN_OK to {selected_port}")
                 except:

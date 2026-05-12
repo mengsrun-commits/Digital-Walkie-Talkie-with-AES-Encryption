@@ -34,26 +34,34 @@ class MyApp(QWidget):
         self.show_start_page()
 
     def show_start_page(self):
+        self.program_page.stop_serial_activity()
         self.stack.setCurrentWidget(self.start_page)
 
     def on_back_to_start(self):
         self.show_start_page()
         
     def show_login_page(self):
+        self.program_page.stop_serial_activity()
         self.login_page.start_connection()
         self.stack.setCurrentWidget(self.login_page)
 
     def show_program_page(self, from_preview=False):
         self.program_page.set_back_mode(from_preview)
-        self.program_page.reload_channel_config()
         if from_preview:
             self.program_page.set_device_name("Walkie-Talkie Device")
             self.program_page.set_upload_port("")
+            self.program_page.set_serial_connection(None)
+            self.program_page.load_preview_data()
         else:
             selected_port = self.login_page._selected_port()
-            self.program_page.set_device_name(self.login_page._format_device_label(selected_port))
+            latest_packet = self.login_page.latest_packets.get(selected_port, {})
+            self.program_page.set_device_name(latest_packet.get("device", "Walkie-Talkie Device"))
             self.program_page.set_upload_port(selected_port)
-            self.login_page.stop_connection()
+            self.program_page.set_serial_connection(self.login_page.serial_connections.get(selected_port))
+            self.program_page.set_device_password(self.login_page.last_device_password)
+            self.program_page.reload_channel_config()
+            self.program_page.set_encrypted_channels(latest_packet.get("encrypted_channels", []))
+            self.login_page.stop_connection(close_connections=False)
 
         # Ensure ProgramPage UI is reset when entering
         self.program_page.header_widget.show()
