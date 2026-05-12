@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -125,10 +124,11 @@ const uint8_t MIN_CHANNEL_VALUE = 80;
 //   [1-4]   : Packet counter (u32, plaintext) — forms per-packet GCM nonce suffix
 //   [5-27]  : AES-GCM ciphertext (23 bytes)
 //   [28-31] : Truncated GCM auth tag (4 bytes)
-const uint8_t ENCRYPTED_CHANNELS[] = {89, 90};
+const uint8_t ENCRYPTED_CHANNELS[] = {89, 91};
 const uint8_t ENCRYPTED_CHANNEL_COUNT = sizeof(ENCRYPTED_CHANNELS) / sizeof(ENCRYPTED_CHANNELS[0]);
 #define ENC_PACKET_TYPE 0xA5
 #define UNENC_PACKET_TYPE 0x5A
+#define NONCE_PACKET_TYPE 0xC3
 #define ENC_HEADER_SIZE 3
 #define ENC_PLAINTEXT_SIZE 23    // 3-byte ADPCM header + 20-byte ADPCM data
 #define ENC_ADPCM_DATA_BYTES 20  // 20 bytes = 40 ADPCM samples
@@ -161,7 +161,7 @@ volatile bool isTransmitting = false;
 
 // Receive-side jitter ring buffer
 #define RX_RING_SIZE 18
-#define RX_PREFILL 3 // How many packets to fill before sending to amp
+#define RX_PREFILL 2 // How many packets to fill before sending to amp
 uint8_t rxRing[RX_RING_SIZE][PACKET_SIZE];
 volatile uint8_t rxHead = 0;
 volatile uint8_t rxTail = 0;
@@ -212,30 +212,43 @@ const char *RADIO_PASSWORD = "passwordEncryption";
 uint8_t radioKey[32];                  // AES-256 key (derived from RADIO_PASSWORD)
 uint8_t radioBaseNonce[8];             // 8-byte base; combined with counter → 12-byte GCM nonce
 volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
+uint8_t radioSessionNonce[8];          // per-PTT session nonce base
+volatile bool sessionNonceValid = false;
+uint8_t txNoncePacket[PACKET_SIZE];
+volatile bool txNoncePending = false;
 
-// Derive radioKey and radioBaseNonce deterministically from RADIO_PASSWORD and PASSWORD.
-// Since all devices share the same passwords, they arrive at the same encryption state.
+// Derive radioKey and radioBaseNonce deterministically from RADIO_PASSWORD only.
+// This keeps radio encryption consistent across devices with different PASSWORD values.
 void initRadioEncryption()
 {
     Serial.println("[Radio] Deriving CH90 encryption key from passwords...");
 
-    // 1. Derive Radio Key: Key=RADIO_PASSWORD, Salt=PASSWORD
+    // 1. Derive Radio Key: Key=RADIO_PASSWORD, Salt=SHA256(RADIO_PASSWORD + suffix)
+    uint8_t radioSalt[32];
+    char radioSaltInput[64];
+    snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", RADIO_PASSWORD);
+    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+               (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
+               radioSalt);
     mbedtls_pkcs5_pbkdf2_hmac_ext(
         MBEDTLS_MD_SHA256,
         (const unsigned char *)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
-        (const unsigned char *)PASSWORD, strlen(PASSWORD),
+        radioSalt, sizeof(radioSalt),
         5000, 32, radioKey);
 
-    // 2. Derive Nonce Base: Key=RADIO_PASSWORD, Salt=PASSWORD + "salt"
-    // We add a suffix to ensure the nonce derivation is mathematically distinct from the key
-    char nonceSalt[64];
-    snprintf(nonceSalt, sizeof(nonceSalt), "%s_nonce", PASSWORD);
+    // 2. Derive Nonce Base: Key=RADIO_PASSWORD, Salt=SHA256(RADIO_PASSWORD + suffix)
+    uint8_t nonceSalt[32];
+    char nonceSaltInput[64];
+    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|radio_salt_nonce", RADIO_PASSWORD);
+    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+               (const unsigned char *)nonceSaltInput, strlen(nonceSaltInput),
+               nonceSalt);
 
     uint8_t nonceBuf[32];
     mbedtls_pkcs5_pbkdf2_hmac_ext(
         MBEDTLS_MD_SHA256,
         (const unsigned char *)RADIO_PASSWORD, strlen(RADIO_PASSWORD),
-        (const unsigned char *)nonceSalt, strlen(nonceSalt),
+        nonceSalt, sizeof(nonceSalt),
         1000, 32, nonceBuf);
     memcpy(radioBaseNonce, nonceBuf, 8);
 
@@ -246,9 +259,11 @@ void initRadioEncryption()
 // Packet: [type(1)] [counter(4)] [ciphertext(23)] [tag_truncated(4)]
 bool encryptRadioPacket(const uint8_t *plaintext, uint8_t *outPkt, uint32_t counter)
 {
+    if (!sessionNonceValid)
+        return false;
     // 12-byte GCM nonce = radioBaseNonce[8] + counter[4]
     uint8_t nonce[12];
-    memcpy(nonce, radioBaseNonce, 8);
+    memcpy(nonce, radioSessionNonce, 8);
     nonce[8] = (counter >> 24) & 0xFF;
     nonce[9] = (counter >> 16) & 0xFF;
     nonce[10] = (counter >> 8) & 0xFF;
@@ -288,9 +303,11 @@ bool decryptRadioPacket(const uint8_t *inPkt, uint8_t *outPlaintext)
 {
     if (inPkt[0] != ENC_PACKET_TYPE)
         return false;
+    if (!sessionNonceValid)
+        return false;
     // Reconstruct 12-byte nonce from packet bytes [1-4]
     uint8_t nonce[12];
-    memcpy(nonce, radioBaseNonce, 8);
+    memcpy(nonce, radioSessionNonce, 8);
     nonce[8] = inPkt[1];
     nonce[9] = inPkt[2];
     nonce[10] = inPkt[3];
@@ -616,6 +633,15 @@ void radioTask(void *param)
         if (isTransmitting && !isProgramMode)
         {
             // --- TRANSMIT MODE ---
+            if (txNoncePending)
+            {
+                if (radio.write(txNoncePacket, PACKET_SIZE))
+                {
+                    txNoncePending = false;
+                }
+                taskYIELD();
+                continue;
+            }
             if (bufferReady[txBufferIndex])
             {
                 if (radio.write(txBuffer[txBufferIndex], PACKET_SIZE))
@@ -646,7 +672,35 @@ void radioTask(void *param)
             {
                 while (radio.available() && rxCount < RX_RING_SIZE)
                 {
-                    radio.read(rxRing[rxHead], PACKET_SIZE);
+                    uint8_t pkt[PACKET_SIZE];
+                    radio.read(pkt, PACKET_SIZE);
+
+                    if (pkt[0] == NONCE_PACKET_TYPE)
+                    {
+                        if (isEncryptedChannel(currentChannel))
+                        {
+                            memcpy(radioSessionNonce, &pkt[1], 8);
+                            sessionNonceValid = true;
+                            Serial.print("[Radio] Received session nonce: ");
+                            for (int i = 0; i < 8; i++)
+                            {
+                                if (radioSessionNonce[i] < 16)
+                                    Serial.print('0');
+                                Serial.print(radioSessionNonce[i], HEX);
+                            }
+                            Serial.println();
+                            lastReceiveTime = millis();
+                        }
+                        continue;
+                    }
+
+                    if (pkt[0] == ENC_PACKET_TYPE && !isEncryptedChannel(currentChannel))
+                    {
+                        // Ignore encrypted packets on unencrypted channels
+                        continue;
+                    }
+
+                    memcpy(rxRing[rxHead], pkt, PACKET_SIZE);
                     rxHead = (rxHead + 1) % RX_RING_SIZE;
                     portENTER_CRITICAL(&rxCountMux);
                     rxCount++;
@@ -661,6 +715,12 @@ void radioTask(void *param)
                     }
                 }
             }
+
+            if (!isTransmitting && rxCount == 0 && (millis() - lastReceiveTime > RECEIVE_TIMEOUT))
+            {
+                sessionNonceValid = false;
+            }
+
             vTaskDelay(1); // Yield briefly, come back quickly to check radio again
         }
     }
@@ -796,7 +856,7 @@ void buttonTask(void *param)
     bool lastLeft = HIGH;
     bool lastRight = HIGH;
     unsigned long lastPttChange = 0;
-    const unsigned long PTT_DEBOUNCE_MS = 150;
+    const unsigned long PTT_DEBOUNCE_MS = 50;
 
     while (1)
     {
@@ -847,12 +907,36 @@ void buttonTask(void *param)
 
         if (pressed && !isTransmitting && !isProgramMode && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
-            isTransmitting = true;
             lastPttChange = now;
             radio.stopListening();
             radio.flush_tx();
             radio.flush_rx();
+
             switchToMicPins();
+
+            if (isEncryptedChannel(currentChannel))
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    radioSessionNonce[i] = (uint8_t)random(0, 256);
+                }
+                sessionNonceValid = true;
+                txPacketCounter = 0;
+                
+                memset(txNoncePacket, 0, PACKET_SIZE);
+                txNoncePacket[0] = NONCE_PACKET_TYPE;
+                memcpy(&txNoncePacket[1], radioSessionNonce, 8);
+                txNoncePending = true;
+            }
+            Serial.print("[Radio] New session nonce: ");
+            for (int i = 0; i < 8; i++)
+            {
+                if (radioSessionNonce[i] < 16)
+                    Serial.print('0');
+                Serial.print(radioSessionNonce[i], HEX);
+            }
+            Serial.println();
+            isTransmitting = true;
             txAdpcmState.predicted = 0;
             txAdpcmState.index = 0;
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -865,12 +949,23 @@ void buttonTask(void *param)
         }
         else if (!pressed && isTransmitting && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
-            isTransmitting = false;
             lastPttChange = now;
-            radio.flush_tx();
-            radio.startListening();
+
+            i2s_stop(I2S_NUM_0);
             switchToSpeakerPins();
+            i2s_zero_dma_buffer(I2S_NUM_0);
+            i2s_start(I2S_NUM_0);
+
+            isTransmitting = false;
+            radio.flush_tx();
+            radio.stopListening();
+            radio.flush_rx();
+            radio.setChannel(currentChannel);
+            radio.startListening();
             vTaskDelay(pdMS_TO_TICKS(10));
+
+            sessionNonceValid = false;
+            txNoncePending = false;
 
             // Reset jitter buffer for clean playback
             rxHead = 0;
@@ -1521,7 +1616,6 @@ void usbHandshakeTask(void *param)
                     32,
                     key);
 
-                Serial.println("Encrypting message...");
                 mbedtls_gcm_context gcm;
                 mbedtls_gcm_init(&gcm);
                 mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
