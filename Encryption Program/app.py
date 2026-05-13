@@ -51,6 +51,7 @@ class MyApp(QWidget):
             self.program_page.set_device_name("Walkie-Talkie Device")
             self.program_page.set_upload_port("")
             self.program_page.set_serial_connection(None)
+            self.program_page.set_radio_salt("")
             self.program_page.load_preview_data()
         else:
             selected_port = self.login_page._selected_port()
@@ -61,6 +62,7 @@ class MyApp(QWidget):
             self.program_page.set_device_password(self.login_page.last_device_password)
             self.program_page.reload_channel_config()
             self.program_page.set_encrypted_channels(latest_packet.get("encrypted_channels", []))
+            self.program_page.set_radio_salt(latest_packet.get("radio_salt", ""))
             self.login_page.stop_connection(close_connections=False)
 
         # Ensure ProgramPage UI is reset when entering

@@ -49,14 +49,17 @@
 #define CE_PIN 2
 #define CSN_PIN 4
 
+#define RADIO_DEBUG 0
+
 // =================================================================
 // 2. GLOBAL VARIABLES & STATES
 // =================================================================
 typedef struct ADPCMState ADPCMState;
 String devicePassword = "";
 String deviceName = "Walkie-Talkie";
-String message = "Welcome!";
+char message[64] = "Welcome!";
 String radioPassword = "";
+String radioSaltValue = "";
 bool ready = false;
 bool sent = false;
 volatile bool isProgramMode = false;
@@ -85,7 +88,7 @@ enum DisplayState
 };
 volatile DisplayState displayState = STATE_STARTUP;
 
-String welcomeText = "Welcome to TEE!   ";
+const char welcomeText[] = "Welcome to TEE!   ";
 int16_t scrollX = SCREEN_WIDTH;
 const uint8_t scrollSpeed = 5;
 uint8_t dotCount = 0;
@@ -112,6 +115,7 @@ uint8_t currentChannel = 80;
 volatile bool channelUpdatePending = false;
 const uint8_t MAX_CHANNEL_VALUE = 125;
 const uint8_t MIN_CHANNEL_VALUE = 80;
+volatile bool currentChannelEncrypted = false;
 
 #define SAMPLE_RATE 16000
 #define PACKET_SIZE 32
@@ -128,6 +132,7 @@ const uint8_t MIN_CHANNEL_VALUE = 80;
 const uint8_t MAX_ENCRYPTED_CHANNELS = MAX_CHANNEL_VALUE - MIN_CHANNEL_VALUE + 1;
 uint8_t encryptedChannels[MAX_ENCRYPTED_CHANNELS] = {};
 uint8_t encryptedChannelCount = 0;
+bool encryptedChannelLookup[MAX_CHANNEL_VALUE + 1] = {};
 #define ENC_PACKET_TYPE 0xA5
 #define UNENC_PACKET_TYPE 0x5A
 #define NONCE_PACKET_TYPE 0xC3
@@ -141,22 +146,38 @@ const uint8_t SHARED_ADDRESS[6] = "Srun";
 
 static inline bool isEncryptedChannel(uint8_t channel)
 {
-    for (uint8_t i = 0; i < encryptedChannelCount; i++)
+    return channel >= MIN_CHANNEL_VALUE && channel <= MAX_CHANNEL_VALUE && encryptedChannelLookup[channel];
+}
+
+void clearEncryptedChannelConfig()
+{
+    encryptedChannelCount = 0;
+    memset(encryptedChannelLookup, 0, sizeof(encryptedChannelLookup));
+}
+
+void addEncryptedChannel(uint8_t channel)
+{
+    if (channel < MIN_CHANNEL_VALUE || channel > MAX_CHANNEL_VALUE || encryptedChannelLookup[channel])
     {
-        if (encryptedChannels[i] == channel)
-        {
-            return true;
-        }
+        return;
     }
-    return false;
+
+    encryptedChannels[encryptedChannelCount++] = channel;
+    encryptedChannelLookup[channel] = true;
+}
+
+void refreshCurrentChannelEncryption()
+{
+    currentChannelEncrypted = isEncryptedChannel(currentChannel);
 }
 
 void loadEncryptedChannels()
 {
-    encryptedChannelCount = 0;
+    clearEncryptedChannelConfig();
     size_t byteCount = preferences.getBytesLength("enc_channels");
     if (byteCount == 0)
     {
+        refreshCurrentChannelEncryption();
         return;
     }
 
@@ -169,18 +190,14 @@ void loadEncryptedChannels()
     size_t loadedCount = preferences.getBytes("enc_channels", loadedChannels, byteCount);
     for (size_t i = 0; i < loadedCount; i++)
     {
-        uint8_t channel = loadedChannels[i];
-        if (channel < MIN_CHANNEL_VALUE || channel > MAX_CHANNEL_VALUE || isEncryptedChannel(channel))
-        {
-            continue;
-        }
-        encryptedChannels[encryptedChannelCount++] = channel;
+        addEncryptedChannel(loadedChannels[i]);
     }
+    refreshCurrentChannelEncryption();
 }
 
 void storeEncryptedChannels(String channelList)
 {
-    encryptedChannelCount = 0;
+    clearEncryptedChannelConfig();
     channelList.trim();
 
     while (channelList.length() > 0 && encryptedChannelCount < MAX_ENCRYPTED_CHANNELS)
@@ -192,9 +209,9 @@ void storeEncryptedChannels(String channelList)
         if (token.length() > 0)
         {
             int parsedChannel = token.toInt();
-            if (parsedChannel >= MIN_CHANNEL_VALUE && parsedChannel <= MAX_CHANNEL_VALUE && !isEncryptedChannel((uint8_t)parsedChannel))
+            if (parsedChannel >= MIN_CHANNEL_VALUE && parsedChannel <= MAX_CHANNEL_VALUE)
             {
-                encryptedChannels[encryptedChannelCount++] = (uint8_t)parsedChannel;
+                addEncryptedChannel((uint8_t)parsedChannel);
             }
         }
 
@@ -213,6 +230,37 @@ void storeEncryptedChannels(String channelList)
     {
         preferences.putBytes("enc_channels", encryptedChannels, encryptedChannelCount);
     }
+    refreshCurrentChannelEncryption();
+}
+
+void changeChannel(int8_t direction)
+{
+    if (direction < 0)
+    {
+        currentChannel = currentChannel > MIN_CHANNEL_VALUE ? currentChannel - 1 : MAX_CHANNEL_VALUE;
+    }
+    else if (direction > 0)
+    {
+        currentChannel = currentChannel < MAX_CHANNEL_VALUE ? currentChannel + 1 : MIN_CHANNEL_VALUE;
+    }
+
+    refreshCurrentChannelEncryption();
+    channelUpdatePending = true;
+    lastChannelActivity = millis();
+}
+
+void showChannelSelector()
+{
+    if (displayState != STATE_CHANNEL && displayState != STATE_SCREEN_OFF && displayState != STATE_STARTUP)
+    {
+        displayState = STATE_CHANNEL;
+        lastChannelActivity = millis();
+    }
+}
+
+void updateDeviceMessage()
+{
+    snprintf(message, sizeof(message), "Welcome %s!", deviceName.c_str());
 }
 
 SPIClass spiNRF(HSPI);
@@ -270,6 +318,38 @@ String b64encode(const unsigned char *input, size_t len)
     return String((char *)out).substring(0, out_len);
 }
 
+bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecodedLength = 128)
+{
+    if (encoded.length() == 0)
+    {
+        decoded = "";
+        return true;
+    }
+
+    unsigned char buffer[128];
+    size_t decodedLength = 0;
+    if (maxDecodedLength > sizeof(buffer) - 1)
+    {
+        maxDecodedLength = sizeof(buffer) - 1;
+    }
+
+    int decodeResult = mbedtls_base64_decode(
+        buffer,
+        maxDecodedLength,
+        &decodedLength,
+        (const unsigned char *)encoded.c_str(),
+        encoded.length());
+
+    if (decodeResult != 0)
+    {
+        return false;
+    }
+
+    buffer[decodedLength] = '\0';
+    decoded = String((char *)buffer);
+    return true;
+}
+
 // =================================================================
 // RADIO AES-GCM ENCRYPTION
 // =================================================================
@@ -285,20 +365,34 @@ volatile bool txNoncePending = false;
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
 void initRadioEncryption()
 {
+#if RADIO_DEBUG
     Serial.println("[Radio] Deriving channel encryption key from passwords...");
+#endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
-    uint8_t radioSalt[32];
-    char radioSaltInput[64];
-    snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", storedRadioPassword);
-    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-               (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
-               radioSalt);
+    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=custom Preferences salt or SHA256(storedRadioPassword + suffix)
+    uint8_t autoRadioKeySalt[32];
+    const unsigned char *radioKeySalt = nullptr;
+    size_t radioKeySaltLength = 0;
+    if (radioSaltValue.length() > 0)
+    {
+        radioKeySalt = (const unsigned char *)radioSaltValue.c_str();
+        radioKeySaltLength = radioSaltValue.length();
+    }
+    else
+    {
+        char radioSaltInput[64];
+        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", storedRadioPassword);
+        mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                   (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
+                   autoRadioKeySalt);
+        radioKeySalt = autoRadioKeySalt;
+        radioKeySaltLength = sizeof(autoRadioKeySalt);
+    }
     mbedtls_pkcs5_pbkdf2_hmac_ext(
         MBEDTLS_MD_SHA256,
         (const unsigned char *)storedRadioPassword, strlen(storedRadioPassword),
-        radioSalt, sizeof(radioSalt),
+        radioKeySalt, radioKeySaltLength,
         5000, 32, radioKey);
 
     // 2. Derive Nonce Base: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
@@ -317,7 +411,9 @@ void initRadioEncryption()
         1000, 32, nonceBuf);
     memcpy(radioBaseNonce, nonceBuf, 8);
 
+#if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
+#endif
 }
 
 // Encrypt ENC_PLAINTEXT_SIZE bytes into a 32-byte radio packet.
@@ -591,7 +687,7 @@ void audioCaptureTask(void *param)
             vTaskDelay(1);
         }
 
-        bool useEncryption = isEncryptedChannel(currentChannel);
+        bool useEncryption = currentChannelEncrypted;
         int frameSamples = useEncryption ? ENC_SAMPLES_PER_FRAME : SAMPLES_PER_FRAME;
 
         i2s_read(I2S_NUM_0, rawBuffer, frameSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
@@ -742,10 +838,11 @@ void radioTask(void *param)
 
                     if (pkt[0] == NONCE_PACKET_TYPE)
                     {
-                        if (isEncryptedChannel(currentChannel))
+                        if (currentChannelEncrypted)
                         {
                             memcpy(radioSessionNonce, &pkt[1], 8);
                             sessionNonceValid = true;
+#if RADIO_DEBUG
                             Serial.print("[Radio] Received session nonce: ");
                             for (int i = 0; i < 8; i++)
                             {
@@ -754,12 +851,13 @@ void radioTask(void *param)
                                 Serial.print(radioSessionNonce[i], HEX);
                             }
                             Serial.println();
+#endif
                             lastReceiveTime = millis();
                         }
                         continue;
                     }
 
-                    if (pkt[0] == ENC_PACKET_TYPE && !isEncryptedChannel(currentChannel))
+                    if (pkt[0] == ENC_PACKET_TYPE && !currentChannelEncrypted)
                     {
                         // Ignore encrypted packets on unencrypted channels
                         continue;
@@ -820,7 +918,7 @@ void playbackTask(void *param)
             bool decoded = false;
             bool isEncPkt = (pkt[0] == ENC_PACKET_TYPE);
             bool isUnencPkt = (pkt[0] == UNENC_PACKET_TYPE);
-            bool channelEncrypted = isEncryptedChannel(currentChannel);
+            bool channelEncrypted = currentChannelEncrypted;
             packetType = isEncPkt ? ENC_PACKET_TYPE : (isUnencPkt ? UNENC_PACKET_TYPE : 0);
 
             if (isEncPkt && channelEncrypted)
@@ -979,7 +1077,7 @@ void buttonTask(void *param)
 
             switchToMicPins();
 
-            if (isEncryptedChannel(currentChannel))
+            if (currentChannelEncrypted)
             {
                 for (int i = 0; i < 8; i++)
                 {
@@ -993,6 +1091,7 @@ void buttonTask(void *param)
                 memcpy(&txNoncePacket[1], radioSessionNonce, 8);
                 txNoncePending = true;
             }
+#if RADIO_DEBUG
             Serial.print("[Radio] New session nonce: ");
             for (int i = 0; i < 8; i++)
             {
@@ -1001,6 +1100,7 @@ void buttonTask(void *param)
                 Serial.print(radioSessionNonce[i], HEX);
             }
             Serial.println();
+#endif
             isTransmitting = true;
             txAdpcmState.predicted = 0;
             txAdpcmState.index = 0;
@@ -1010,7 +1110,9 @@ void buttonTask(void *param)
                 displayState = STATE_TRANSMIT;
             dotCount = 0;
             lastAnimUpdate = millis();
+#if RADIO_DEBUG
             Serial.println("TX mode");
+#endif
         }
         else if (!pressed && isTransmitting && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
@@ -1043,7 +1145,9 @@ void buttonTask(void *param)
                 displayState = STATE_IDLE;
                 scrollX = SCREEN_WIDTH;
             }
+#if RADIO_DEBUG
             Serial.println("RX mode");
+#endif
         }
 
         static unsigned long lastLeftPressTime = 0;
@@ -1065,20 +1169,11 @@ void buttonTask(void *param)
 
                     if (displayState != STATE_CHANNEL)
                     {
-                        if (displayState != STATE_SCREEN_OFF && displayState != STATE_STARTUP)
-                        {
-                            displayState = STATE_CHANNEL;
-                            lastChannelActivity = millis();
-                        }
+                        showChannelSelector();
                     }
                     else
                     {
-                        if (currentChannel > MIN_CHANNEL_VALUE)
-                            currentChannel--;
-                        else
-                            currentChannel = MAX_CHANNEL_VALUE;
-                        channelUpdatePending = true;
-                        lastChannelActivity = millis();
+                        changeChannel(-1);
                     }
                 }
             }
@@ -1092,13 +1187,7 @@ void buttonTask(void *param)
                 if (leftRepeating && (now - leftHoldStartTime > RAPID_CHANNEL_SWITCH_TIME))
                 {
                     leftHoldStartTime = now;
-                    // Directly change channel since UI is already awake
-                    if (currentChannel > MIN_CHANNEL_VALUE)
-                        currentChannel--;
-                    else
-                        currentChannel = MAX_CHANNEL_VALUE;
-                    channelUpdatePending = true;
-                    lastChannelActivity = millis();
+                    changeChannel(-1);
                 }
             }
         }
@@ -1119,20 +1208,11 @@ void buttonTask(void *param)
 
                     if (displayState != STATE_CHANNEL)
                     {
-                        if (displayState != STATE_SCREEN_OFF && displayState != STATE_STARTUP)
-                        {
-                            displayState = STATE_CHANNEL;
-                            lastChannelActivity = millis();
-                        }
+                        showChannelSelector();
                     }
                     else
                     {
-                        if (currentChannel < MAX_CHANNEL_VALUE)
-                            currentChannel++;
-                        else
-                            currentChannel = MIN_CHANNEL_VALUE;
-                        channelUpdatePending = true;
-                        lastChannelActivity = millis();
+                        changeChannel(1);
                     }
                 }
             }
@@ -1146,13 +1226,7 @@ void buttonTask(void *param)
                 if (rightRepeating && (now - rightHoldStartTime > RAPID_CHANNEL_SWITCH_TIME))
                 {
                     rightHoldStartTime = now;
-                    // Directly change channel since UI is already awake
-                    if (currentChannel < MAX_CHANNEL_VALUE)
-                        currentChannel++;
-                    else
-                        currentChannel = MIN_CHANNEL_VALUE;
-                    channelUpdatePending = true;
-                    lastChannelActivity = millis();
+                    changeChannel(1);
                 }
             }
         }
@@ -1384,7 +1458,7 @@ void OLEDTask(void *parameter)
                 // Draw channel text centered with size 2
                 drawCenteredText(chText, 2);
 
-                if (isEncryptedChannel(currentChannel))
+                if (currentChannelEncrypted)
                 {
                     // Draw "(Encrypted)" centered at the bottom
                     const char *encText = "(Encrypted)";
@@ -1538,7 +1612,7 @@ void OLEDTask(void *parameter)
             display.print(welcomeText);
 
             scrollX -= scrollSpeed;
-            if (scrollX + (int16_t)(welcomeText.length() * CHAR_WIDTH) < 0)
+            if (scrollX + (int16_t)(strlen(welcomeText) * CHAR_WIDTH) < 0)
             {
                 scrollX = SCREEN_WIDTH;
             }
@@ -1640,19 +1714,10 @@ void usbHandshakeTask(void *param)
                 else if (msg.startsWith("device_password_b64:"))
                 {
                     String encodedPassword = msg.substring(strlen("device_password_b64:"));
-                    unsigned char decodedPassword[128];
-                    size_t decodedLength = 0;
-                    int decodeResult = mbedtls_base64_decode(
-                        decodedPassword,
-                        sizeof(decodedPassword) - 1,
-                        &decodedLength,
-                        (const unsigned char *)encodedPassword.c_str(),
-                        encodedPassword.length());
-
-                    if (decodeResult == 0 && decodedLength > 0)
+                    String decodedPassword = "";
+                    if (decodeB64ToString(encodedPassword, decodedPassword) && decodedPassword.length() > 0)
                     {
-                        decodedPassword[decodedLength] = '\0';
-                        devicePassword = String((char *)decodedPassword);
+                        devicePassword = decodedPassword;
                         preferences.putString("device_pwd", devicePassword);
                         Serial.println("Device password stored.");
                     }
@@ -1664,20 +1729,11 @@ void usbHandshakeTask(void *param)
                 else if (msg.startsWith("device_name_b64:"))
                 {
                     String encodedName = msg.substring(strlen("device_name_b64:"));
-                    unsigned char decodedName[128];
-                    size_t decodedLength = 0;
-                    int decodeResult = mbedtls_base64_decode(
-                        decodedName,
-                        sizeof(decodedName) - 1,
-                        &decodedLength,
-                        (const unsigned char *)encodedName.c_str(),
-                        encodedName.length());
-
-                    if (decodeResult == 0 && decodedLength > 0)
+                    String decodedName = "";
+                    if (decodeB64ToString(encodedName, decodedName) && decodedName.length() > 0)
                     {
-                        decodedName[decodedLength] = '\0';
-                        deviceName = String((char *)decodedName);
-                        message = "Welcome " + deviceName + "!";
+                        deviceName = decodedName;
+                        updateDeviceMessage();
                         preferences.putString("device_name", deviceName);
                         Serial.println("Device name stored.");
                     }
@@ -1689,19 +1745,10 @@ void usbHandshakeTask(void *param)
                 else if (msg.startsWith("radio_password_b64:"))
                 {
                     String encodedPassword = msg.substring(strlen("radio_password_b64:"));
-                    unsigned char decodedPassword[128];
-                    size_t decodedLength = 0;
-                    int decodeResult = mbedtls_base64_decode(
-                        decodedPassword,
-                        sizeof(decodedPassword) - 1,
-                        &decodedLength,
-                        (const unsigned char *)encodedPassword.c_str(),
-                        encodedPassword.length());
-
-                    if (decodeResult == 0 && decodedLength > 0)
+                    String decodedPassword = "";
+                    if (decodeB64ToString(encodedPassword, decodedPassword) && decodedPassword.length() > 0)
                     {
-                        decodedPassword[decodedLength] = '\0';
-                        radioPassword = String((char *)decodedPassword);
+                        radioPassword = decodedPassword;
                         preferences.putString("radio_pwd", radioPassword);
                         initRadioEncryption();
                         Serial.println("Radio password stored.");
@@ -1709,6 +1756,29 @@ void usbHandshakeTask(void *param)
                     else
                     {
                         Serial.println("Failed to store radio password.");
+                    }
+                }
+                else if (msg.startsWith("radio_salt_b64:"))
+                {
+                    String encodedSalt = msg.substring(strlen("radio_salt_b64:"));
+                    String decodedSalt = "";
+                    if (decodeB64ToString(encodedSalt, decodedSalt))
+                    {
+                        radioSaltValue = decodedSalt;
+                        if (radioSaltValue.length() > 0)
+                        {
+                            preferences.putString("radio_salt", radioSaltValue);
+                        }
+                        else
+                        {
+                            preferences.remove("radio_salt");
+                        }
+                        initRadioEncryption();
+                        Serial.println("Radio salt stored.");
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store radio salt.");
                     }
                 }
                 else if (msg.startsWith("encrypted_channels:"))
@@ -1756,11 +1826,10 @@ void usbHandshakeTask(void *param)
                 unsigned char key[32];
 
                 Serial.println("Computing PBKDF2...");
-                String activeDevicePassword = devicePassword;
                 mbedtls_pkcs5_pbkdf2_hmac_ext(
                     MBEDTLS_MD_SHA256,
-                    (const unsigned char *)activeDevicePassword.c_str(),
-                    activeDevicePassword.length(),
+                    (const unsigned char *)devicePassword.c_str(),
+                    devicePassword.length(),
                     salt,
                     16,
                     10000,
@@ -1777,11 +1846,11 @@ void usbHandshakeTask(void *param)
                 mbedtls_gcm_crypt_and_tag(
                     &gcm,
                     MBEDTLS_GCM_ENCRYPT,
-                    message.length(),
+                    strlen(message),
                     nonce,
                     12,
                     NULL, 0,
-                    (const unsigned char *)message.c_str(),
+                    (const unsigned char *)message,
                     ciphertext,
                     16,
                     tag);
@@ -1793,6 +1862,7 @@ void usbHandshakeTask(void *param)
 
                 out["device"] = deviceName;
                 out["password_enabled"] = passwordConfigured;
+                out["radio_salt"] = radioSaltValue;
                 JsonArray encryptedChannelJson = out.createNestedArray("encrypted_channels");
                 for (uint8_t i = 0; i < encryptedChannelCount; i++)
                 {
@@ -1800,7 +1870,7 @@ void usbHandshakeTask(void *param)
                 }
                 out["salt"] = b64encode(salt, 16);
                 out["nonce"] = b64encode(nonce, 12);
-                out["ciphertext"] = b64encode(ciphertext, message.length());
+                out["ciphertext"] = b64encode(ciphertext, strlen(message));
                 out["tag"] = b64encode(tag, 16);
 
                 Serial.println("Sending Handshake JSON...");
@@ -1841,9 +1911,10 @@ void setup()
     Serial.begin(115200);
     preferences.begin("walkie", false);
     deviceName = preferences.getString("device_name", "Walkie-Talkie");
-    message = "Welcome " + deviceName + "!";
+    updateDeviceMessage();
     devicePassword = preferences.getString("device_pwd", "");
     radioPassword = preferences.getString("radio_pwd", "");
+    radioSaltValue = preferences.getString("radio_salt", "");
     loadEncryptedChannels();
     initRadioEncryption(); // Derive radio key & nonce from the stored radio password.
     // --- GPIO Setup ---
@@ -1888,6 +1959,7 @@ void setup()
     if (currentChannel < MIN_CHANNEL_VALUE || currentChannel > MAX_CHANNEL_VALUE)
         currentChannel = MIN_CHANNEL_VALUE;
     savedChannel = currentChannel;
+    refreshCurrentChannelEncryption();
 
     // --- SPI Radio Setup ---
     spiNRF.begin(NRF_SCK, NRF_MISO, NRF_MOSI, CSN_PIN);

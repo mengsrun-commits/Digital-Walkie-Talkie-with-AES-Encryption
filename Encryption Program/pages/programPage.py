@@ -34,6 +34,9 @@ class ProgramPage(QWidget):
 		self._upload_port = ""
 		self._serial_connection = None
 		self._pending_radio_password = ""
+		self._radio_salt = ""
+		self._saved_radio_salt = ""
+		self._updating_salt = False
 		self._pending_device_name = ""
 		self._pending_device_password = ""
 		self._settings_dirty = False
@@ -105,8 +108,9 @@ class ProgramPage(QWidget):
 		self.encryption_form.setVerticalSpacing(12)
 
 		self.salt_input = QLineEdit()
-		self.salt_input.setPlaceholderText("Set salt")
+		self.salt_input.setPlaceholderText("(Optional) Auto-generated if not filled in")
 		self.salt_input.setMinimumHeight(34)
+		self.salt_input.textChanged.connect(self._on_salt_changed)
 
 		self.encryption_form.addRow("Set salt:", self.salt_input)
 		self.encryption_layout.addLayout(self.encryption_form)
@@ -126,7 +130,6 @@ class ProgramPage(QWidget):
 		self.set_configuration_button.clicked.connect(self._on_set_configuration_clicked)
 		self.main_layout.addWidget(self.set_configuration_button)
 
-		# Disconnect Overlay (hidden by default)
 		self.disconnect_label = QLabel("Device Disconnected!")
 		self.disconnect_label.setStyleSheet("color: #ff4d4d; font-weight: bold; font-size: 20px;")
 		self.disconnect_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -192,6 +195,14 @@ class ProgramPage(QWidget):
 		}
 		self._saved_encrypted_channels = set(self._encrypted_channels)
 		self._populate_channel_list()
+
+	def set_radio_salt(self, salt: str):
+		self._radio_salt = salt or ""
+		self._saved_radio_salt = self._radio_salt
+		self._updating_salt = True
+		self.salt_input.setText(self._radio_salt)
+		self._updating_salt = False
+		self._update_set_configuration_button()
 
 	def reload_channel_config(self):
 		self._min_channel, self._max_channel = self._read_ino_channel_config()
@@ -295,7 +306,17 @@ class ProgramPage(QWidget):
 		self._updating_channels = False
 
 	def _has_unsaved_changes(self):
-		return self._encrypted_channels != self._saved_encrypted_channels or self._settings_dirty
+		return (
+			self._encrypted_channels != self._saved_encrypted_channels
+			or self._radio_salt != self._saved_radio_salt
+			or self._settings_dirty
+		)
+
+	def _on_salt_changed(self, value: str):
+		if self._updating_salt:
+			return
+		self._radio_salt = value.strip()
+		self._update_set_configuration_button()
 
 	def _update_set_configuration_button(self):
 		self.set_configuration_button.setEnabled(True)
@@ -306,6 +327,7 @@ class ProgramPage(QWidget):
 
 	def _discard_pending_changes(self):
 		self._encrypted_channels = set(self._saved_encrypted_channels)
+		self.set_radio_salt(self._saved_radio_salt)
 		self._settings_dirty = False
 		self._pending_device_name = self._device_name
 		self.title.setText(self._device_name)
@@ -492,6 +514,13 @@ class ProgramPage(QWidget):
 						self._set_channel_status(self._format_serial_failure("Radio password", replies), is_error=True)
 						return False
 
+				if self._radio_salt != self._saved_radio_salt:
+					encoded_radio_salt = base64.b64encode(self._radio_salt.encode()).decode()
+					confirmed, replies = self._send_serial_command(connection, f"radio_salt_b64:{encoded_radio_salt}", "Radio salt stored.")
+					if not confirmed:
+						self._set_channel_status(self._format_serial_failure("Radio salt", replies), is_error=True)
+						return False
+
 				channel_list = ",".join(str(channel) for channel in sorted(self._encrypted_channels))
 				confirmed, replies = self._send_serial_command(connection, f"encrypted_channels:{channel_list}", "Encrypted channels stored.")
 				if not confirmed:
@@ -509,6 +538,7 @@ class ProgramPage(QWidget):
 
 		self._pending_radio_password = ""
 		self._settings_dirty = False
+		self._saved_radio_salt = self._radio_salt
 		self._device_name = self._pending_device_name or self._device_name
 		self._saved_encrypted_channels = set(self._encrypted_channels)
 		self._update_set_configuration_button()
