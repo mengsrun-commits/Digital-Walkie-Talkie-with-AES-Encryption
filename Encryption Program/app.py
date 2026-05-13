@@ -76,7 +76,7 @@ class MyApp(QWidget):
         self.stack.setCurrentWidget(self.program_page)
         QTimer.singleShot(0, self.login_page.clear_credentials)
 
-    def _on_device_disconnected(self, port):
+    def _on_device_disconnected(self):
         """Handler for when a device is physically unplugged."""
         if self.stack.currentWidget() == self.program_page:
             # If we are on program page, show message and exit to start

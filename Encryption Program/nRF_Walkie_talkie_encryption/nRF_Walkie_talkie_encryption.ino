@@ -71,6 +71,7 @@ bool hasDisplay = true;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Preferences preferences;
 uint8_t savedChannel = 80;
+const char *BUILD_ID = __DATE__ " " __TIME__;
 
 enum DisplayState
 {
@@ -1476,7 +1477,7 @@ void OLEDTask(void *parameter)
             display.setTextSize(1);
             display.setTextColor(SSD1306_WHITE);
             display.setCursor(0, 5);
-            display.println("USB connected!");
+            display.println("CONNECTED!");
             display.setTextSize(1);
             display.setCursor(0, 20);
             display.println("Enter Program mode?");
@@ -1651,7 +1652,7 @@ void usbHandshakeTask(void *param)
                 {
                     // Device is off. Auto-enter program mode to allow headless programming.
                     isProgramMode = true;
-                    displayState = STATE_PROGRAM_MODE;
+                    displayState = STATE_SCREEN_OFF;
                     Serial.println("Auto-entered Program Mode (Device OFF)");
                 }
                 else
@@ -1909,7 +1910,51 @@ void usbHandshakeTask(void *param)
 void setup()
 {
     Serial.begin(115200);
+    
+    // --- OLED Setup ---
+    Wire.begin(SDA_PIN, SCK_PIN);
+    Wire.setClock(100000); // Use standard speed for detection
+    
+    // Check if anything is responding at the OLED address
+    Wire.beginTransmission(0x3C);
+    if (Wire.endTransmission() == 0)
+    {
+        hasDisplay = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+    }
+    else
+    {
+        hasDisplay = false;
+    }
+    
+    if (!hasDisplay)
+    {
+        Serial.println("OLED not found at 0x3C or unpowered.");
+    }
+    else
+    {
+        Wire.setClock(400000); // Back to high speed
+        display.ssd1306_command(SSD1306_SETCONTRAST);
+        display.ssd1306_command(0xCF);
+        display.clearDisplay();
+        display.display();
+        Serial.println("OLED Initialized.");
+        display.clearDisplay();
+        display.setTextSize(2);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(4, (SCREEN_HEIGHT - 16) / 2);
+        display.print("Starting..");
+        display.display();
+    }
+    
+    startupTime = millis();
     preferences.begin("walkie", false);
+    // Clear stored settings once after each new upload.
+    String storedBuildId = preferences.getString("build_id", "");
+    if (storedBuildId != BUILD_ID)
+    {
+        preferences.clear();
+        preferences.putString("build_id", BUILD_ID);
+    }
     deviceName = preferences.getString("device_name", "Walkie-Talkie");
     updateDeviceMessage();
     devicePassword = preferences.getString("device_pwd", "");
@@ -1923,36 +1968,6 @@ void setup()
     pinMode(BTN_RIGHT, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
-
-    // --- OLED Setup ---
-    Wire.begin(SDA_PIN, SCK_PIN);
-    Wire.setClock(100000); // Use standard speed for detection
-
-    // Check if anything is responding at the OLED address
-    Wire.beginTransmission(0x3C);
-    if (Wire.endTransmission() == 0)
-    {
-        hasDisplay = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-    }
-    else
-    {
-        hasDisplay = false;
-    }
-
-    if (!hasDisplay)
-    {
-        Serial.println("OLED not found at 0x3C or unpowered.");
-    }
-    else
-    {
-        Wire.setClock(400000); // Back to high speed
-        display.ssd1306_command(SSD1306_SETCONTRAST);
-        display.ssd1306_command(0xCF);
-        display.clearDisplay();
-        display.display();
-        Serial.println("OLED Initialized.");
-    }
-    startupTime = millis();
 
     // --- Preferences Setup ---
     currentChannel = preferences.getUChar("channel", MIN_CHANNEL_VALUE);
