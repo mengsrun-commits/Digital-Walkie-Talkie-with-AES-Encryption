@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QMessageBox,
     QGroupBox, QGraphicsOpacityEffect, QSizePolicy, QToolButton,
-    QComboBox
+    QComboBox, QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QTimer, QPoint
 from PyQt6.QtGui import QFont
@@ -199,7 +199,6 @@ class LoginApp(QWidget):
                         self.latest_packets[port] = msg
                         if port == selected_port:
                             self.latest_packet = msg
-                            self._show_login_ready()
                             self._show_login_ready()
 
                         if port in self._device_ports:
@@ -506,10 +505,30 @@ class LoginApp(QWidget):
         self._set_login_visible(False)
 
     def _show_login_ready(self):
+        if getattr(self, '_is_prompting_password', False):
+            return
+
         self.waiting_label.hide()
         self.disconnect_label.hide()
         self.connecting_label.hide()
         self.connecting_dots_timer.stop()
+        
+        password_configured = self._device_password_enabled()
+        if not password_configured:
+            self._is_prompting_password = True
+            try:
+                new_password = self._prompt_create_password()
+            finally:
+                self._is_prompting_password = False
+
+            if not new_password:
+                return
+            
+            # Set the password in the input field and auto-login
+            self.password_input.setText(new_password)
+            self.on_login()
+            return
+            
         self._set_login_visible(True)
 
     def _update_form_width(self):
@@ -555,13 +574,10 @@ class LoginApp(QWidget):
 
         if password_configured:
             if not password:
-                QMessageBox.warning(self, "Missing Input", "Please enter the Encryption Key.")
+                QMessageBox.warning(self, "Missing Input", "Please enter your password")
                 return
             effective_password = password
         else:
-            if not password:
-                QMessageBox.warning(self, "Missing Input", "No device password is set. Please create one to continue.")
-                return
             pending_device_password = password
             effective_password = ""
 
@@ -626,6 +642,55 @@ class LoginApp(QWidget):
             self.password_input.clear()
 
         QTimer.singleShot(2000, self.status_label.clear)
+
+    def _prompt_create_password(self) -> str:
+        self._set_login_visible(False)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create Device Password")
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
+
+        info_label = QLabel("No device password is set. Create one to continue.")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        password_input = QLineEdit()
+        password_input.setPlaceholderText("New password")
+        password_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        confirm_input = QLineEdit()
+        confirm_input.setPlaceholderText("Confirm password")
+        confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        layout.addWidget(password_input)
+        layout.addWidget(confirm_input)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        result = ""
+        while True:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                break
+
+            new_password = password_input.text().strip()
+            confirm_password = confirm_input.text().strip()
+            if not new_password:
+                QMessageBox.warning(self, "Missing Input", "Please enter a new password.")
+                continue
+            if new_password != confirm_password:
+                QMessageBox.warning(self, "Mismatch", "Passwords do not match.")
+                continue
+
+            result = new_password
+            break
+
+        self._set_login_visible(True)
+        return result
 
     def on_clear(self):
         self.password_input.clear()
