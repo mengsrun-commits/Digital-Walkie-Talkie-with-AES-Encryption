@@ -63,6 +63,7 @@ String radioSaltValue = "";
 bool ready = false;
 bool sent = false;
 volatile bool isProgramMode = false;
+volatile bool autoProgramMode = false;
 volatile bool usbSelection = true; // true for Yes, false for No
 volatile bool usbPromptActive = false;
 volatile bool usbRejected = false;
@@ -115,7 +116,7 @@ const unsigned long RAPID_CHANNEL_SWITCH_TIME = 100;
 uint8_t currentChannel = 80;
 volatile bool channelUpdatePending = false;
 const uint8_t MAX_CHANNEL_VALUE = 125;
-const uint8_t MIN_CHANNEL_VALUE = 80;
+const uint8_t MIN_CHANNEL_VALUE = 1;
 volatile bool currentChannelEncrypted = false;
 
 #define SAMPLE_RATE 16000
@@ -301,6 +302,9 @@ volatile float GAIN_FOR_UI = 1.0f; // Kept for drawing the OLED volume bar
 volatile int32_t GAIN = 256;       // OPTIMIZED: 1.0 = 256 for fast audio math
 const float GAIN_MIN = 0.1f;
 const float GAIN_MAX = 3.5f;
+const int POT_AUTO_PROGRAM_THRESHOLD = 5;
+const int POT_OFF_THRESHOLD = 30;
+const int POT_ON_THRESHOLD = 150;
 
 // Limiter thresholds
 const int32_t LIMIT_PRE = 10000;
@@ -1046,6 +1050,7 @@ void buttonTask(void *param)
                 if (usbSelection)
                 {
                     isProgramMode = true;
+                    autoProgramMode = false;
                     displayState = STATE_PROGRAM_MODE;
                     preferences.putBool("in_prog", true);
                     ready = true; // Start handshake immediately
@@ -1055,6 +1060,7 @@ void buttonTask(void *param)
                 else
                 {
                     isProgramMode = false;
+                    autoProgramMode = false;
                     usbRejected = true;
                     displayState = STATE_IDLE;
                     preferences.putBool("in_prog", false);
@@ -1252,7 +1258,7 @@ void volumeReadTask(void *param)
 
         // Detect pot at absolute bottom (switch is about to cut power)
         // Immediately blank OLED before ESP32 loses power (or OLED loses battery power)
-        if (potValue < 30 && displayState != STATE_SCREEN_OFF && displayState != STATE_STARTUP)
+        if (potValue < POT_OFF_THRESHOLD && displayState != STATE_SCREEN_OFF && displayState != STATE_STARTUP)
         {
             if (hasDisplay)
             {
@@ -1267,8 +1273,19 @@ void volumeReadTask(void *param)
         {
             lastPotValue = potValue;
 
-            if (potValue >= 30 && displayState == STATE_SCREEN_OFF)
+            if (potValue >= POT_ON_THRESHOLD && displayState == STATE_SCREEN_OFF)
             {
+                bool wasAutoProgramMode = autoProgramMode;
+                if (wasAutoProgramMode)
+                {
+                    isProgramMode = false;
+                    autoProgramMode = false;
+                    usbPromptActive = false;
+                    ready = false;
+                    sent = false;
+                    preferences.putBool("in_prog", false);
+                }
+
                 // If the OLED hardware lost power via the switch, it needs full re-initialization
                 // since the ESP32 stayed alive on USB power.
                 if (hasDisplay)
@@ -1282,7 +1299,11 @@ void volumeReadTask(void *param)
                 }
 
                 // Restore the correct state
-                if (isProgramMode)
+                if (wasAutoProgramMode)
+                {
+                    displayState = STATE_VOLUME;
+                }
+                else if (isProgramMode)
                 {
                     displayState = STATE_PROGRAM_MODE;
                 }
@@ -1648,10 +1669,11 @@ void usbHandshakeTask(void *param)
             if (!isProgramMode && !usbPromptActive && !usbRejected)
             {
                 int potValue = adc1_get_raw(POT_CHANNEL);
-                if (potValue < 30)
+                if (potValue <= POT_AUTO_PROGRAM_THRESHOLD)
                 {
                     // Device is off. Auto-enter program mode to allow headless programming.
                     isProgramMode = true;
+                    autoProgramMode = true;
                     displayState = STATE_SCREEN_OFF;
                     Serial.println("Auto-entered Program Mode (Device OFF)");
                 }
@@ -1797,6 +1819,7 @@ void usbHandshakeTask(void *param)
                 {
                     heartbeatActive = false;
                     isProgramMode = false;
+                    autoProgramMode = false;
                     usbPromptActive = false;
                     usbRejected = false;
                     ready = false;
@@ -1886,6 +1909,7 @@ void usbHandshakeTask(void *param)
             if (isProgramMode || usbPromptActive || usbRejected)
             {
                 isProgramMode = false;
+                autoProgramMode = false;
                 usbPromptActive = false;
                 usbRejected = false;
                 ready = false;
