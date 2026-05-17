@@ -64,7 +64,7 @@ bool ready = false;
 bool sent = false;
 volatile bool isProgramMode = false;
 volatile bool autoProgramMode = false;
-volatile bool usbSelection = true; // true for Yes, false for No
+volatile bool usbSelection = true; 
 volatile bool usbPromptActive = false;
 volatile bool usbRejected = false;
 bool hasDisplay = true;
@@ -103,7 +103,7 @@ unsigned long startupTime = 0;
 unsigned long lastChannelActivity = 0;
 unsigned long disconnectTime = 0;
 unsigned long loginSuccessTime = 0;
-const unsigned long VOLUME_SHOW_DURATION = 2000;
+const unsigned long VOLUME_SHOW_DURATION = 1000;
 const unsigned long SCREEN_OFF_DELAY = 1000;
 const unsigned long STARTUP_SHOW_DURATION = 1500;
 const unsigned long RECEIVE_TIMEOUT = 500;
@@ -113,7 +113,7 @@ const unsigned long BUTTON_HOLD_DURATION = 700;
 const unsigned long RAPID_CHANNEL_SWITCH_TIME = 100;
 
 // Radio & Buffers
-uint8_t currentChannel = 80;
+uint8_t currentChannel = 1;
 volatile bool channelUpdatePending = false;
 const uint8_t MAX_CHANNEL_VALUE = 125;
 const uint8_t MIN_CHANNEL_VALUE = 1;
@@ -301,7 +301,7 @@ const int VOLUME_HYSTERESIS = 400;
 volatile float GAIN_FOR_UI = 1.0f; // Kept for drawing the OLED volume bar
 volatile int32_t GAIN = 256;       // OPTIMIZED: 1.0 = 256 for fast audio math
 const float GAIN_MIN = 0.1f;
-const float GAIN_MAX = 3.5f;
+const float GAIN_MAX = 5.0f;
 const int POT_AUTO_PROGRAM_THRESHOLD = 5;
 const int POT_OFF_THRESHOLD = 30;
 const int POT_ON_THRESHOLD = 150;
@@ -311,8 +311,8 @@ const int32_t LIMIT_PRE = 10000;
 const int32_t LIMIT_POST = 28000;
 
 // Raise this value if you still get feedback; lower it if soft speech is cut off.
-const int32_t NOISE_GATE_THRESHOLD = 300; // range: 0 (disabled) – ~32767 (full-scale); practical: 50–500
-const int32_t FIXED_MIC_GAIN = 179;       // 0.7x gain (256 = 1.0x)
+const int32_t NOISE_GATE_THRESHOLD = 350; // range: 0 (disabled) – ~32767 (full-scale); practical: 50–500
+const int32_t FIXED_MIC_GAIN = 128;       // 0.5x gain (128 = 1.0x)
 
 String b64encode(const unsigned char *input, size_t len)
 {
@@ -359,14 +359,13 @@ bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecoded
 // RADIO AES-GCM ENCRYPTION
 // =================================================================
 uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
-uint8_t radioBaseNonce[8];             // 8-byte base; combined with counter → 12-byte GCM nonce
 volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
 uint8_t radioSessionNonce[8];          // per-PTT session nonce base
 volatile bool sessionNonceValid = false;
 uint8_t txNoncePacket[PACKET_SIZE];
 volatile bool txNoncePending = false;
 
-// Derive radioKey and radioBaseNonce deterministically from the stored radio password.
+// Derive radioKey deterministically from the stored radio password.
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
 void initRadioEncryption()
 {
@@ -375,7 +374,7 @@ void initRadioEncryption()
 #endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=custom Preferences salt or SHA256(storedRadioPassword + suffix)
+    // Derive Radio Key: Key=storedRadioPassword, Salt=custom Preferences salt or SHA256(storedRadioPassword + suffix)
     uint8_t autoRadioKeySalt[32];
     const unsigned char *radioKeySalt = nullptr;
     size_t radioKeySaltLength = 0;
@@ -400,22 +399,6 @@ void initRadioEncryption()
         radioKeySalt, radioKeySaltLength,
         5000, 32, radioKey);
 
-    // 2. Derive Nonce Base: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
-    uint8_t nonceSalt[32];
-    char nonceSaltInput[64];
-    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|radio_salt_nonce", storedRadioPassword);
-    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-               (const unsigned char *)nonceSaltInput, strlen(nonceSaltInput),
-               nonceSalt);
-
-    uint8_t nonceBuf[32];
-    mbedtls_pkcs5_pbkdf2_hmac_ext(
-        MBEDTLS_MD_SHA256,
-        (const unsigned char *)storedRadioPassword, strlen(storedRadioPassword),
-        nonceSalt, sizeof(nonceSalt),
-        1000, 32, nonceBuf);
-    memcpy(radioBaseNonce, nonceBuf, 8);
-
 #if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
 #endif
@@ -427,7 +410,7 @@ bool encryptRadioPacket(const uint8_t *plaintext, uint8_t *outPkt, uint32_t coun
 {
     if (!sessionNonceValid)
         return false;
-    // 12-byte GCM nonce = radioBaseNonce[8] + counter[4]
+    // 12-byte GCM nonce = radioSessionNonce[8] + counter[4]
     uint8_t nonce[12];
     memcpy(nonce, radioSessionNonce, 8);
     nonce[8] = (counter >> 24) & 0xFF;
@@ -716,7 +699,7 @@ void audioCaptureTask(void *param)
 
         if (useEncryption)
         {
-            // --- ENCRYPTED PATH (Channel 90) ---
+            // --- ENCRYPTED PATH ---
             // Plaintext: [pred_hi][pred_lo][index][adpcm_data x20] = 23 bytes
             uint8_t plaintext[ENC_PLAINTEXT_SIZE];
             if (peak < NOISE_GATE_THRESHOLD)
@@ -747,7 +730,7 @@ void audioCaptureTask(void *param)
         }
         else
         {
-            // --- UNENCRYPTED PATH (all other channels) ---
+            // --- UNENCRYPTED PATH ---
             if (peak < NOISE_GATE_THRESHOLD)
             {
                 memset(txBuffer[fillBuffer], 0, PACKET_SIZE);
@@ -861,7 +844,7 @@ void radioTask(void *param)
                         }
                         continue;
                     }
-
+                    // comment it out if you want to hear noise
                     if (pkt[0] == ENC_PACKET_TYPE && !currentChannelEncrypted)
                     {
                         // Ignore encrypted packets on unencrypted channels
@@ -944,18 +927,19 @@ void playbackTask(void *param)
                     decoded = true;
                 }
             }
-            else if (isEncPkt && !channelEncrypted)
-            {
-                // Encrypted packet on an unencrypted channel -> decode as raw ADPCM (noise)
-                ADPCMState rxState;
-                rxState.predicted = (int16_t)((pkt[1] << 8) | pkt[2]);
-                rxState.index = pkt[3];
-                if (rxState.index > 88)
-                    rxState.index = 88;
-                adpcmDecode(&pkt[UNENC_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
-                samplesOut = SAMPLES_PER_FRAME;
-                decoded = true;
-            }
+            // Uncomment if you want to clearly see the encryption in play
+            // else if (isEncPkt && !channelEncrypted)
+            // {
+            //     // Encrypted packet on an unencrypted channel -> decode as raw ADPCM (noise)
+            //     ADPCMState rxState;
+            //     rxState.predicted = (int16_t)((pkt[1] << 8) | pkt[2]);
+            //     rxState.index = pkt[3];
+            //     if (rxState.index > 88)
+            //         rxState.index = 88;
+            //     adpcmDecode(&pkt[UNENC_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
+            //     samplesOut = SAMPLES_PER_FRAME;
+            //     decoded = true;
+            // }
             else if (isUnencPkt)
             {
                 // --- UNENCRYPTED PATH (all channels) ---
