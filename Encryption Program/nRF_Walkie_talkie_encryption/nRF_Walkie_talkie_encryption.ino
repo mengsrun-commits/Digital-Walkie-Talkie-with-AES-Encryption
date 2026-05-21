@@ -15,6 +15,7 @@
 #include "mbedtls/md.h"
 #include "mbedtls/base64.h"
 #include <Fonts/FreeMono9pt7b.h>
+#include <Fonts/TomThumb.h>
 
 // =================================================================
 // 1. PIN DEFINITIONS
@@ -31,6 +32,8 @@
 #define POT_CHANNEL ADC1_CHANNEL_6
 #define BTN_LEFT 17
 #define BTN_RIGHT 16
+#define BTN_UP 26
+#define BTN_DOWN 27
 
 // INMP441 I2S Mic
 #define I2S_WS 25
@@ -86,7 +89,9 @@ enum DisplayState
     STATE_PROGRAM_PROMPT,
     STATE_PROGRAM_MODE,
     STATE_LOGGED_IN,
-    STATE_USB_DISCONNECTED
+    STATE_USB_DISCONNECTED,
+    STATE_MENU_LIST,
+    STATE_MENU_ATTEMPT_DECRYPT
 };
 volatile DisplayState displayState = STATE_STARTUP;
 
@@ -118,6 +123,20 @@ volatile bool channelUpdatePending = false;
 const uint8_t MAX_CHANNEL_VALUE = 125;
 const uint8_t MIN_CHANNEL_VALUE = 1;
 volatile bool currentChannelEncrypted = false;
+volatile bool attemptDecryptOnUnencrypted = false;
+volatile bool menuRightActionSelected = true;
+unsigned long transmitEnabledAt = 0;
+const unsigned long MENU_EXIT_TRANSMIT_LOCKOUT_MS = 300;
+
+static inline bool isMenuMode()
+{
+    return displayState == STATE_MENU_LIST || displayState == STATE_MENU_ATTEMPT_DECRYPT;
+}
+
+static inline bool walkieFeaturesPaused()
+{
+    return isProgramMode || isMenuMode();
+}
 
 #define SAMPLE_RATE 16000
 #define PACKET_SIZE 32
@@ -273,7 +292,18 @@ volatile bool bufferReady[2] = {false, false};
 volatile uint8_t fillBuffer = 0;
 volatile uint8_t txBufferIndex = 0;
 volatile int txFails = 0;
+volatile int txNonceFails = 0;
 volatile bool isTransmitting = false;
+
+void resetTxBufferState()
+{
+    bufferReady[0] = false;
+    bufferReady[1] = false;
+    fillBuffer = 0;
+    txBufferIndex = 0;
+    txFails = 0;
+    txNonceFails = 0;
+}
 
 // Receive-side jitter ring buffer
 #define RX_RING_SIZE 18
@@ -284,6 +314,29 @@ volatile uint8_t rxTail = 0;
 volatile uint8_t rxCount = 0;
 volatile bool rxPlaying = false;
 portMUX_TYPE rxCountMux = portMUX_INITIALIZER_UNLOCKED;
+
+void enterMenu(DisplayState state)
+{
+    isTransmitting = false;
+    resetTxBufferState();
+    rxHead = 0;
+    rxTail = 0;
+    rxCount = 0;
+    rxPlaying = false;
+    digitalWrite(LED_PIN, LOW);
+    if (hasDisplay)
+    {
+        display.ssd1306_command(SSD1306_DISPLAYON);
+    }
+    displayState = state;
+}
+
+void exitMenu()
+{
+    displayState = STATE_IDLE;
+    scrollX = SCREEN_WIDTH;
+    transmitEnabledAt = millis() + MENU_EXIT_TRANSMIT_LOCKOUT_MS;
+}
 
 // ADPCM encoder state (persistent across frames during TX)
 struct ADPCMState
@@ -664,21 +717,35 @@ void audioCaptureTask(void *param)
 
     while (1)
     {
-        if (!isTransmitting || isProgramMode)
+        if (!isTransmitting || walkieFeaturesPaused())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        while (bufferReady[fillBuffer])
+        while (isTransmitting && !walkieFeaturesPaused() && bufferReady[fillBuffer])
         {
             vTaskDelay(1);
         }
+        if (!isTransmitting || walkieFeaturesPaused())
+        {
+            continue;
+        }
 
         bool useEncryption = currentChannelEncrypted;
+        if (useEncryption && txNoncePending)
+        {
+            vTaskDelay(1);
+            continue;
+        }
+
         int frameSamples = useEncryption ? ENC_SAMPLES_PER_FRAME : SAMPLES_PER_FRAME;
 
         i2s_read(I2S_NUM_0, rawBuffer, frameSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
+        if (!isTransmitting || walkieFeaturesPaused())
+        {
+            continue;
+        }
         if (bytesRead < frameSamples * sizeof(int32_t))
         {
             vTaskDelay(1);
@@ -726,7 +793,11 @@ void audioCaptureTask(void *param)
                             ENC_SAMPLES_PER_FRAME, &txAdpcmState);
             }
             uint32_t counter = txPacketCounter++;
-            encryptRadioPacket(plaintext, txBuffer[fillBuffer], counter);
+            if (!encryptRadioPacket(plaintext, txBuffer[fillBuffer], counter))
+            {
+                vTaskDelay(1);
+                continue;
+            }
         }
         else
         {
@@ -757,8 +828,11 @@ void audioCaptureTask(void *param)
             }
         }
 
-        bufferReady[fillBuffer] = true;
-        fillBuffer ^= 1;
+        if (isTransmitting && !walkieFeaturesPaused())
+        {
+            bufferReady[fillBuffer] = true;
+            fillBuffer ^= 1;
+        }
         vTaskDelay(1);
     }
 }
@@ -779,7 +853,7 @@ void radioTask(void *param)
             channelUpdatePending = false;
         }
 
-        if (isTransmitting && !isProgramMode)
+        if (isTransmitting && !walkieFeaturesPaused())
         {
             // --- TRANSMIT MODE ---
             if (txNoncePending)
@@ -787,6 +861,21 @@ void radioTask(void *param)
                 if (radio.write(txNoncePacket, PACKET_SIZE))
                 {
                     txNoncePending = false;
+                    txNonceFails = 0;
+                    txFails = 0;
+                }
+                else
+                {
+                    txNonceFails++;
+                    if (txNonceFails > 10)
+                    {
+                        radio.flush_tx();
+                        radio.powerDown();
+                        vTaskDelay(pdMS_TO_TICKS(5));
+                        radio.powerUp();
+                        radio.stopListening();
+                        txNonceFails = 0;
+                    }
                 }
                 taskYIELD();
                 continue;
@@ -813,7 +902,7 @@ void radioTask(void *param)
             }
             taskYIELD();
         }
-        else if (!isProgramMode)
+        else if (!walkieFeaturesPaused())
         {
             // --- RECEIVE MODE ---
             // Drain all available radio packets into jitter ring buffer
@@ -844,10 +933,9 @@ void radioTask(void *param)
                         }
                         continue;
                     }
-                    // comment it out if you want to hear noise
-                    if (pkt[0] == ENC_PACKET_TYPE && !currentChannelEncrypted)
+                    if (pkt[0] == ENC_PACKET_TYPE && !currentChannelEncrypted && !attemptDecryptOnUnencrypted)
                     {
-                        // Ignore encrypted packets on unencrypted channels
+                        // Ignore encrypted packets on unencrypted channels unless the menu setting allows noisy playback.
                         continue;
                     }
 
@@ -887,7 +975,7 @@ void playbackTask(void *param)
 
     while (1)
     {
-        if (isTransmitting || isProgramMode)
+        if (isTransmitting || walkieFeaturesPaused())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -927,19 +1015,18 @@ void playbackTask(void *param)
                     decoded = true;
                 }
             }
-            // Uncomment if you want to clearly see the encryption in play
-            // else if (isEncPkt && !channelEncrypted)
-            // {
-            //     // Encrypted packet on an unencrypted channel -> decode as raw ADPCM (noise)
-            //     ADPCMState rxState;
-            //     rxState.predicted = (int16_t)((pkt[1] << 8) | pkt[2]);
-            //     rxState.index = pkt[3];
-            //     if (rxState.index > 88)
-            //         rxState.index = 88;
-            //     adpcmDecode(&pkt[UNENC_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
-            //     samplesOut = SAMPLES_PER_FRAME;
-            //     decoded = true;
-            // }
+            else if (isEncPkt && !channelEncrypted && attemptDecryptOnUnencrypted)
+            {
+                // Optional noisy demonstration mode: treat encrypted payload bytes like plain ADPCM.
+                ADPCMState rxState;
+                rxState.predicted = (int16_t)((pkt[1] << 8) | pkt[2]);
+                rxState.index = pkt[3];
+                if (rxState.index > 88)
+                    rxState.index = 88;
+                adpcmDecode(&pkt[UNENC_HEADER_SIZE], pcmOut, SAMPLES_PER_FRAME, &rxState);
+                samplesOut = SAMPLES_PER_FRAME;
+                decoded = true;
+            }
             else if (isUnencPkt)
             {
                 // --- UNENCRYPTED PATH (all channels) ---
@@ -1007,6 +1094,9 @@ void buttonTask(void *param)
 {
     bool lastLeft = HIGH;
     bool lastRight = HIGH;
+    bool lastUp = HIGH;
+    bool lastDown = HIGH;
+    bool lastPtt = false;
     unsigned long lastPttChange = 0;
     const unsigned long PTT_DEBOUNCE_MS = 50;
 
@@ -1015,7 +1105,52 @@ void buttonTask(void *param)
         bool pressed = !digitalRead(BUTTON);
         bool leftState = digitalRead(BTN_LEFT);
         bool rightState = digitalRead(BTN_RIGHT);
+        bool upState = digitalRead(BTN_UP);
+        bool downState = digitalRead(BTN_DOWN);
         unsigned long now = millis();
+
+        if (isMenuMode())
+        {
+            if (leftState == LOW && lastLeft == HIGH)
+            {
+                menuRightActionSelected = false;
+            }
+            if (rightState == LOW && lastRight == HIGH)
+            {
+                menuRightActionSelected = true;
+            }
+            if (pressed && !lastPtt && (now - lastPttChange >= PTT_DEBOUNCE_MS))
+            {
+                lastPttChange = now;
+                if (!menuRightActionSelected)
+                {
+                    if (displayState == STATE_MENU_ATTEMPT_DECRYPT)
+                    {
+                        enterMenu(STATE_MENU_LIST);
+                    }
+                    else
+                    {
+                        exitMenu();
+                    }
+                }
+                else if (displayState == STATE_MENU_LIST)
+                {
+                    enterMenu(STATE_MENU_ATTEMPT_DECRYPT);
+                }
+                else
+                {
+                    attemptDecryptOnUnencrypted = !attemptDecryptOnUnencrypted;
+                    preferences.putBool("attempt_dec", attemptDecryptOnUnencrypted);
+                }
+            }
+            lastLeft = leftState;
+            lastRight = rightState;
+            lastUp = upState;
+            lastDown = downState;
+            lastPtt = pressed;
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
         if (displayState == STATE_PROGRAM_PROMPT)
         {
@@ -1055,16 +1190,21 @@ void buttonTask(void *param)
             }
             lastLeft = leftState;
             lastRight = rightState;
+            lastUp = upState;
+            lastDown = downState;
+            lastPtt = pressed;
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        if (pressed && !isTransmitting && !isProgramMode && (now - lastPttChange >= PTT_DEBOUNCE_MS))
+        if (pressed && !lastPtt && !isTransmitting && !walkieFeaturesPaused() && now >= transmitEnabledAt && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
             lastPttChange = now;
             radio.stopListening();
             radio.flush_tx();
             radio.flush_rx();
+            resetTxBufferState();
+            txNoncePending = false;
 
             switchToMicPins();
 
@@ -1124,6 +1264,7 @@ void buttonTask(void *param)
 
             sessionNonceValid = false;
             txNoncePending = false;
+            resetTxBufferState();
 
             // Reset jitter buffer for clean playback
             rxHead = 0;
@@ -1143,12 +1284,22 @@ void buttonTask(void *param)
 
         static unsigned long lastLeftPressTime = 0;
         static unsigned long lastRightPressTime = 0;
+        static unsigned long lastMenuPressTime = 0;
         static unsigned long leftHoldStartTime = 0;
         static unsigned long rightHoldStartTime = 0;
         static bool leftRepeating = false;
         static bool rightRepeating = false;
 
-        if (leftState == LOW && !isTransmitting && !isProgramMode)
+        if ((upState == LOW && lastUp == HIGH || downState == LOW && lastDown == HIGH) && !isTransmitting && !walkieFeaturesPaused())
+        {
+            if (now - lastMenuPressTime > 200)
+            {
+                lastMenuPressTime = now;
+                enterMenu(STATE_MENU_LIST);
+            }
+        }
+
+        if (leftState == LOW && !isTransmitting && !walkieFeaturesPaused())
         {
             if (lastLeft == HIGH)
             { // Initial press
@@ -1168,7 +1319,7 @@ void buttonTask(void *param)
                     }
                 }
             }
-            else
+            else if (displayState == STATE_CHANNEL)
             { // Being held
                 if (!leftRepeating && (now - leftHoldStartTime > BUTTON_HOLD_DURATION))
                 {
@@ -1187,7 +1338,7 @@ void buttonTask(void *param)
             leftRepeating = false;
         }
 
-        if (rightState == LOW && !isTransmitting && !isProgramMode)
+        if (rightState == LOW && !isTransmitting && !walkieFeaturesPaused())
         {
             if (lastRight == HIGH)
             { // Initial press
@@ -1207,7 +1358,7 @@ void buttonTask(void *param)
                     }
                 }
             }
-            else
+            else if (displayState == STATE_CHANNEL)
             { // Being held
                 if (!rightRepeating && (now - rightHoldStartTime > BUTTON_HOLD_DURATION))
                 {
@@ -1228,6 +1379,9 @@ void buttonTask(void *param)
 
         lastLeft = leftState;
         lastRight = rightState;
+        lastUp = upState;
+        lastDown = downState;
+        lastPtt = pressed;
 
         vTaskDelay(pdMS_TO_TICKS(20)); // Debounce
     }
@@ -1302,7 +1456,7 @@ void volumeReadTask(void *param)
             }
 
             // Only change the actual volume if we are in normal walkie-talkie mode
-            if (!isProgramMode && !usbPromptActive && displayState != STATE_USB_DISCONNECTED)
+            if (!walkieFeaturesPaused() && !usbPromptActive && displayState != STATE_USB_DISCONNECTED)
             {
                 float newGain = 0.1f + (float)potValue * ((GAIN_MAX - 0.1f) / 4095.0f);
                 newGain = constrain(newGain, GAIN_MIN, GAIN_MAX);
@@ -1311,7 +1465,7 @@ void volumeReadTask(void *param)
                 GAIN = (int32_t)(newGain * 256);
 
                 lastVolumeChange = millis();
-                if (displayState != STATE_SCREEN_OFF && displayState != STATE_PROGRAM_MODE && displayState != STATE_PROGRAM_PROMPT)
+                if (displayState != STATE_SCREEN_OFF && displayState != STATE_PROGRAM_MODE && displayState != STATE_PROGRAM_PROMPT && !isMenuMode())
                 {
                     displayState = STATE_VOLUME;
                 }
@@ -1355,6 +1509,87 @@ void drawVolume(float gain)
     for (int i = 0; i < bars; i++)
     {
         display.fillRect(startX + i * (barWidth + spacing), barY, barWidth, 20, SSD1306_WHITE);
+    }
+}
+
+void drawMenuButton(const char *label, int16_t x, int16_t y, int16_t w, bool selected)
+{
+    display.setTextSize(1);
+    const int16_t buttonH = 15;
+    if (selected)
+    {
+        display.fillRoundRect(x, y, w, buttonH, 3, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+    }
+    else
+    {
+        display.drawRoundRect(x, y, w, buttonH, 3, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+    }
+
+    int16_t x1, y1;
+    uint16_t textW, textH;
+    display.getTextBounds(label, 0, 0, &x1, &y1, &textW, &textH);
+    display.setCursor(x + (w - textW) / 2 - x1, y + (buttonH - textH) / 2 - y1);
+    display.print(label);
+    display.setTextColor(SSD1306_WHITE);
+}
+
+void drawMenuActions(const char *rightLabel)
+{
+    drawMenuButton("< Back", 0, 49, 48, !menuRightActionSelected);
+    drawMenuButton(rightLabel, 76, 49, 52, menuRightActionSelected);
+}
+
+void drawWrappedText(const char *text, int16_t x, int16_t y, int16_t maxWidth, int16_t lineHeight)
+{
+    String line = "";
+    String word = "";
+
+    for (const char *p = text;; p++)
+    {
+        char c = *p;
+        bool endOfWord = c == ' ' || c == '\n' || c == '\0';
+
+        if (!endOfWord)
+        {
+            word += c;
+            continue;
+        }
+
+        if (word.length() > 0)
+        {
+            String testLine = line.length() == 0 ? word : line + " " + word;
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(testLine.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+            if (line.length() > 0 && w > maxWidth)
+            {
+                display.setCursor(x, y);
+                display.print(line);
+                y += lineHeight;
+                line = word;
+            }
+            else
+            {
+                line = testLine;
+            }
+            word = "";
+        }
+
+        if ((c == '\n' || c == '\0') && line.length() > 0)
+        {
+            display.setCursor(x, y);
+            display.print(line);
+            y += lineHeight;
+            line = "";
+        }
+
+        if (c == '\0')
+        {
+            break;
+        }
     }
 }
 
@@ -1475,6 +1710,52 @@ void OLEDTask(void *parameter)
                     display.print(encText);
                 }
             }
+            break;
+        }
+        case STATE_MENU_LIST:
+        {
+            display.setFont(&TomThumb);
+            display.setTextSize(1);
+            display.setTextColor(SSD1306_WHITE);
+            display.setCursor(0, 8);
+            display.print("Menu");
+            display.drawLine(0, 14, SCREEN_WIDTH, 14, SSD1306_WHITE);
+
+            display.fillRoundRect(0, 20, SCREEN_WIDTH, 16, 3, SSD1306_WHITE);
+            display.setTextColor(SSD1306_BLACK);
+            display.setCursor(5, 28);
+            display.print("Attempt Decrypt");
+
+            const char *status = attemptDecryptOnUnencrypted ? "ON" : "OFF";
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(status, 0, 0, &x1, &y1, &w, &h);
+            display.setCursor(SCREEN_WIDTH - w - 5 - x1, 28);
+            display.print(status);
+
+            drawMenuActions("Select");
+            display.setFont();
+            break;
+        }
+        case STATE_MENU_ATTEMPT_DECRYPT:
+        {
+            display.setFont(&TomThumb);
+            display.setTextSize(1);
+            display.setTextColor(SSD1306_WHITE);
+
+            const char *title = "Attempt Decrypt";
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+            int16_t titleX = (SCREEN_WIDTH - w) / 2 - x1;
+            display.setCursor(titleX, 8);
+            display.print(title);
+            display.drawLine(titleX + x1, 11, titleX + x1 + w - 1, 11, SSD1306_WHITE);
+
+            drawWrappedText("Try  to decrypt on unencrypted channels when it receives an encrypted packet. Output will be noise", 4, 21, SCREEN_WIDTH - 8, 8);
+
+            drawMenuActions(attemptDecryptOnUnencrypted ? "Off" : "On");
+            display.setFont();
             break;
         }
         case STATE_PROGRAM_PROMPT:
@@ -1650,7 +1931,7 @@ void usbHandshakeTask(void *param)
         // We wait for the "ready" command from the Python program as the activation signal.
         if (Serial)
         {
-            if (!isProgramMode && !usbPromptActive && !usbRejected)
+            if (!walkieFeaturesPaused() && !usbPromptActive && !usbRejected)
             {
                 int potValue = adc1_get_raw(POT_CHANNEL);
                 if (potValue <= POT_AUTO_PROGRAM_THRESHOLD)
@@ -1694,7 +1975,7 @@ void usbHandshakeTask(void *param)
                     heartbeatActive = true;
                     lastHeartbeatTime = millis();
 
-                    if (!isProgramMode && !usbPromptActive)
+                    if (!walkieFeaturesPaused() && !usbPromptActive)
                     {
                         // Show prompt when PC connects, instead of auto-entering
                         usbPromptActive = true;
@@ -1968,12 +2249,15 @@ void setup()
     devicePassword = preferences.getString("device_pwd", "");
     radioPassword = preferences.getString("radio_pwd", "");
     radioSaltValue = preferences.getString("radio_salt", "");
+    attemptDecryptOnUnencrypted = preferences.getBool("attempt_dec", false);
     loadEncryptedChannels();
     initRadioEncryption(); // Derive radio key & nonce from the stored radio password.
     // --- GPIO Setup ---
     pinMode(BUTTON, INPUT_PULLUP);
     pinMode(BTN_LEFT, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_UP, INPUT_PULLUP);
+    pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 

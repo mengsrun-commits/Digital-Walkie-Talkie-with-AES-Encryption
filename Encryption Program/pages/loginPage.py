@@ -71,10 +71,12 @@ class LoginApp(QWidget):
         self.last_device_password = ""
         self.setMinimumWidth(400)
         self._services_started = False
+        self._password_required_redirecting = False
         self.setup_ui()
 
     def start_connection(self):
         self._services_started = True
+        self._password_required_redirecting = False
 
         # Ensure UI/Service components are initialized
         if not hasattr(self, 'serial_read_timer'): self._setup_serial_reader()
@@ -406,6 +408,9 @@ class LoginApp(QWidget):
         self._refresh_device_list()
 
     def _refresh_device_list(self):
+        if self._password_required_redirecting:
+            return
+
         ports = find_esp32_ports()
         had_devices = bool(self._device_ports)  # <-- previous state
 
@@ -505,6 +510,9 @@ class LoginApp(QWidget):
         self._set_login_visible(False)
 
     def _show_login_ready(self):
+        if self._password_required_redirecting:
+            return
+
         if getattr(self, '_is_prompting_password', False):
             return
 
@@ -522,6 +530,7 @@ class LoginApp(QWidget):
                 self._is_prompting_password = False
 
             if not new_password:
+                self._show_password_required_dialog()
                 return
             
             # Set the password in the input field and auto-login
@@ -530,6 +539,18 @@ class LoginApp(QWidget):
             return
             
         self._set_login_visible(True)
+
+    def _show_password_required_dialog(self):
+        self._password_required_redirecting = True
+        self._set_login_visible(False)
+        QMessageBox.information(
+            self,
+            "Password Required",
+            "A device password is required. You cannot continue to the program page without setting a password."
+        )
+        self.stop_connection(close_connections=True)
+        self._password_required_redirecting = False
+        self.back_to_start.emit()
 
     def _update_form_width(self):
         target_width = int(self.width() * self.FORM_WIDTH_RATIO)
@@ -689,7 +710,7 @@ class LoginApp(QWidget):
             result = new_password
             break
 
-        self._set_login_visible(True)
+        self._set_login_visible(bool(result))
         return result
 
     def on_clear(self):

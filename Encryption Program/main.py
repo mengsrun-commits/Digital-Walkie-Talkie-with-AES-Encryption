@@ -6,5 +6,5 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # Clean cross-platform style
     window = MyApp()
-    window.showMaximized()
+    window.show()
     sys.exit(app.exec())
