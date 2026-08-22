@@ -295,6 +295,19 @@ volatile int txFails = 0;
 volatile int txNonceFails = 0;
 volatile bool isTransmitting = false;
 
+// The RF24 object belongs to radioTask alone. Any other task that needs a mode
+// change posts it here instead of driving the radio itself — two cores issuing
+// interleaved register sequences can leave the nRF wedged in RX, and RF24::write()
+// then spins forever waiting on a TX_DS that never arrives.
+enum RadioRequest : uint8_t
+{
+    RADIO_REQ_NONE = 0,
+    RADIO_REQ_TX,
+    RADIO_REQ_RX
+};
+volatile uint8_t radioRequest = RADIO_REQ_NONE;
+const int RADIO_REQ_TIMEOUT_TICKS = 200;
+
 void resetTxBufferState()
 {
     bufferReady[0] = false;
@@ -354,7 +367,7 @@ const int VOLUME_HYSTERESIS = 400;
 volatile float GAIN_FOR_UI = 1.0f; // Kept for drawing the OLED volume bar
 volatile int32_t GAIN = 256;       // OPTIMIZED: 1.0 = 256 for fast audio math
 const float GAIN_MIN = 0.1f;
-const float GAIN_MAX = 5.0f;
+const float GAIN_MAX = 2.5f;
 const int POT_AUTO_PROGRAM_THRESHOLD = 5;
 const int POT_OFF_THRESHOLD = 30;
 const int POT_ON_THRESHOLD = 150;
@@ -837,11 +850,102 @@ void audioCaptureTask(void *param)
     }
 }
 
+// Switch the radio to TX and open a new encrypted session. radioTask only.
+// isTransmitting is set last so audioCaptureTask never sees a half-built session.
+void applyRadioTxMode()
+{
+    radio.stopListening();
+    radio.flush_tx();
+    radio.flush_rx();
+    resetTxBufferState();
+    txNoncePending = false;
+
+    if (currentChannelEncrypted)
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            radioSessionNonce[i] = (uint8_t)random(0, 256);
+        }
+        sessionNonceValid = true;
+        txPacketCounter = 0;
+
+        memset(txNoncePacket, 0, PACKET_SIZE);
+        txNoncePacket[0] = NONCE_PACKET_TYPE;
+        memcpy(&txNoncePacket[1], radioSessionNonce, 8);
+        txNoncePending = true;
+    }
+#if RADIO_DEBUG
+    Serial.print("[Radio] New session nonce: ");
+    for (int i = 0; i < 8; i++)
+    {
+        if (radioSessionNonce[i] < 16)
+            Serial.print('0');
+        Serial.print(radioSessionNonce[i], HEX);
+    }
+    Serial.println();
+#endif
+    txAdpcmState.predicted = 0;
+    txAdpcmState.index = 0;
+    isTransmitting = true;
+}
+
+// Return the radio to RX and drop any in-flight TX session state. radioTask only.
+void applyRadioRxMode()
+{
+    isTransmitting = false;
+    radio.flush_tx();
+    radio.stopListening();
+    radio.flush_rx();
+    radio.setChannel(currentChannel);
+    radio.startListening();
+
+    sessionNonceValid = false;
+    txNoncePending = false;
+    resetTxBufferState();
+
+    // Reset jitter buffer for clean playback
+    rxHead = 0;
+    rxTail = 0;
+    rxCount = 0;
+    rxPlaying = false;
+}
+
+// Hand a mode change to radioTask and wait for it to land, so the caller can keep
+// sequencing its own work afterwards. Returns false if radioTask never picked it up.
+bool requestRadioMode(uint8_t request)
+{
+    radioRequest = request;
+    for (int i = 0; i < RADIO_REQ_TIMEOUT_TICKS && radioRequest != RADIO_REQ_NONE; i++)
+    {
+        vTaskDelay(1);
+    }
+    if (radioRequest != RADIO_REQ_NONE)
+    {
+        radioRequest = RADIO_REQ_NONE;
+        return false;
+    }
+    return true;
+}
+
 // Radio-only task: handles TX and RX without ever blocking on I2S
 void radioTask(void *param)
 {
     while (1)
     {
+        uint8_t request = radioRequest;
+        if (request != RADIO_REQ_NONE)
+        {
+            if (request == RADIO_REQ_TX)
+            {
+                applyRadioTxMode();
+            }
+            else
+            {
+                applyRadioRxMode();
+            }
+            radioRequest = RADIO_REQ_NONE;
+        }
+
         if (channelUpdatePending)
         {
             radio.stopListening();
@@ -1200,50 +1304,26 @@ void buttonTask(void *param)
         if (pressed && !lastPtt && !isTransmitting && !walkieFeaturesPaused() && now >= transmitEnabledAt && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
             lastPttChange = now;
-            radio.stopListening();
-            radio.flush_tx();
-            radio.flush_rx();
-            resetTxBufferState();
-            txNoncePending = false;
 
             switchToMicPins();
 
-            if (currentChannelEncrypted)
+            if (!requestRadioMode(RADIO_REQ_TX))
             {
-                for (int i = 0; i < 8; i++)
-                {
-                    radioSessionNonce[i] = (uint8_t)random(0, 256);
-                }
-                sessionNonceValid = true;
-                txPacketCounter = 0;
-
-                memset(txNoncePacket, 0, PACKET_SIZE);
-                txNoncePacket[0] = NONCE_PACKET_TYPE;
-                memcpy(&txNoncePacket[1], radioSessionNonce, 8);
-                txNoncePending = true;
+                // radioTask never applied it — don't leave I2S pointed at the mic.
+                switchToSpeakerPins();
             }
-#if RADIO_DEBUG
-            Serial.print("[Radio] New session nonce: ");
-            for (int i = 0; i < 8; i++)
+            else
             {
-                if (radioSessionNonce[i] < 16)
-                    Serial.print('0');
-                Serial.print(radioSessionNonce[i], HEX);
-            }
-            Serial.println();
-#endif
-            isTransmitting = true;
-            txAdpcmState.predicted = 0;
-            txAdpcmState.index = 0;
-            vTaskDelay(pdMS_TO_TICKS(10));
+                vTaskDelay(pdMS_TO_TICKS(10));
 
-            if (displayState != STATE_SCREEN_OFF)
-                displayState = STATE_TRANSMIT;
-            dotCount = 0;
-            lastAnimUpdate = millis();
+                if (displayState != STATE_SCREEN_OFF)
+                    displayState = STATE_TRANSMIT;
+                dotCount = 0;
+                lastAnimUpdate = millis();
 #if RADIO_DEBUG
-            Serial.println("TX mode");
+                Serial.println("TX mode");
 #endif
+            }
         }
         else if (!pressed && isTransmitting && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
@@ -1254,23 +1334,8 @@ void buttonTask(void *param)
             i2s_zero_dma_buffer(I2S_NUM_0);
             i2s_start(I2S_NUM_0);
 
-            isTransmitting = false;
-            radio.flush_tx();
-            radio.stopListening();
-            radio.flush_rx();
-            radio.setChannel(currentChannel);
-            radio.startListening();
+            requestRadioMode(RADIO_REQ_RX);
             vTaskDelay(pdMS_TO_TICKS(10));
-
-            sessionNonceValid = false;
-            txNoncePending = false;
-            resetTxBufferState();
-
-            // Reset jitter buffer for clean playback
-            rxHead = 0;
-            rxTail = 0;
-            rxCount = 0;
-            rxPlaying = false;
 
             if (displayState != STATE_SCREEN_OFF)
             {

@@ -283,8 +283,9 @@ class CustomCC1101 : public CC1101 {
 };
 CustomCC1101 radio = new Module(CC1101_CS, CC1101_GDO0, RADIOLIB_NC, RADIOLIB_NC, spiCC);
 
-uint8_t txBuffer[2][PACKET_SIZE];
-volatile bool bufferReady[2] = {false, false};
+#define TX_RING_SIZE 6
+uint8_t txBuffer[TX_RING_SIZE][PACKET_SIZE];
+volatile bool bufferReady[TX_RING_SIZE] = {};
 volatile uint8_t fillBuffer = 0;
 volatile uint8_t txBufferIndex = 0;
 volatile int txFails = 0;
@@ -292,7 +293,7 @@ volatile bool isTransmitting = false;
 
 // Receive-side jitter ring buffer
 #define RX_RING_SIZE 32
-#define RX_PREFILL 8 // How many packets to fill before sending to amp
+#define RX_PREFILL 2 // How many packets to fill before sending to amp
 uint8_t rxRing[RX_RING_SIZE][PACKET_SIZE];
 volatile uint8_t rxHead = 0;
 volatile uint8_t rxTail = 0;
@@ -753,24 +754,52 @@ bool cc1101_read(uint8_t *buf, uint8_t len)
 
 bool cc1101_write(const uint8_t *buf, uint8_t len)
 {
+    // Clear any stale notifications so we only wait for the *new* TX interrupt
+    cc1101PacketInterrupt = false;
+    ulTaskNotifyTake(pdTRUE, 0);
+
     int state = radio.startTransmit((uint8_t *)buf, len);
     if (state == RADIOLIB_ERR_NONE)
     {
-        unsigned long startTx = millis();
-        while (radio.SPIgetRegValue(0x35, 4, 0) != 0x01)
+        // Block this task until the GDO0 pin triggers the ISR (end of transmission).
+        // This yields the CPU entirely to other tasks, exactly like nRF's radio.write!
+        // At 250kbps, a 32-byte packet takes ~1.5ms. We allow up to 10ms.
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)) == pdFALSE && !cc1101PacketInterrupt)
         {
-            taskYIELD();
-            if (millis() - startTx > 20)
+            // Fallback: poll the GPIO pin directly (much faster than SPI), then check MARCSTATE
+            unsigned long startTx = millis();
+            while (digitalRead(CC1101_GDO0) || radio.SPIgetRegValue(0x35, 4, 0) != 0x01)
             {
-                state = RADIOLIB_ERR_TX_TIMEOUT;
-                break;
+                taskYIELD();
+                if (millis() - startTx > 10)
+                {
+                    state = RADIOLIB_ERR_TX_TIMEOUT;
+                    break;
+                }
             }
         }
     }
 
+    cc1101PacketInterrupt = false;
     radio.standby();
     radio.SPIsendCommand(0x3B); // SFTX
     return state == RADIOLIB_ERR_NONE;
+}
+
+// Manual frequency calibration. With FS_AUTOCAL disabled (see cc1101_init) the radio no
+// longer recalibrates on every IDLE->TX/RX transition. That ~720us-per-packet calibration
+// was the main reason the CC1101 could not keep up with the ~300-400 packet/sec audio rate.
+// Instead we calibrate once, here, whenever we (re)enter RX or start a transmission.
+void cc1101_calibrate()
+{
+    radio.standby();            // SIDLE -> IDLE
+    radio.SPIsendCommand(0x33); // SCAL: calibrate, auto-returns to IDLE when finished
+    unsigned long start = millis();
+    while (radio.SPIgetRegValue(0x35, 4, 0) != 0x01) // wait for MARCSTATE = IDLE
+    {
+        if (millis() - start > 5)
+            break;
+    }
 }
 
 void cc1101_start_rx()
@@ -779,6 +808,7 @@ void cc1101_start_rx()
     radio.standby();
     radio.SPIsendCommand(0x3A); // SFRX
     radio.setFrequency(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING);
+    cc1101_calibrate(); // calibrate for this frequency (FS_AUTOCAL is disabled)
     radio.startReceive();
 }
 
@@ -803,9 +833,19 @@ void audioCaptureTask(void *param)
         }
 
         bool useEncryption = currentChannelEncrypted;
+        if (useEncryption && txNoncePending)
+        {
+            vTaskDelay(1);
+            continue;
+        }
+
         int frameSamples = useEncryption ? ENC_SAMPLES_PER_FRAME : SAMPLES_PER_FRAME;
 
         i2s_read(I2S_NUM_0, rawBuffer, frameSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
+        if (!isTransmitting || isProgramMode)
+        {
+            continue;
+        }
         if (bytesRead < frameSamples * sizeof(int32_t))
         {
             vTaskDelay(1);
@@ -889,7 +929,7 @@ void audioCaptureTask(void *param)
         }
 
         bufferReady[fillBuffer] = true;
-        fillBuffer ^= 1;
+        fillBuffer = (fillBuffer + 1) % TX_RING_SIZE;
         vTaskDelay(1);
     }
 }
@@ -939,7 +979,7 @@ void radioTask(void *param)
                     bufferReady[txBufferIndex] = false;
                     txFails = 0;
                     txSuccessCount++;
-                    txBufferIndex ^= 1;
+                    txBufferIndex = (txBufferIndex + 1) % TX_RING_SIZE;
                 }
                 else
                 {
@@ -955,11 +995,13 @@ void radioTask(void *param)
 
                 if (millis() - lastTxPrint > 2000)
                 {
+                    lastTxPrint = millis();
+#if RADIO_DEBUG
                     Serial.printf("TX: %d ok, %d fail | CH=%d F=%.2f MHz encrypted=%d\n",
                                   txSuccessCount, txFailCount, currentChannel,
                                   (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING),
                                   currentChannelEncrypted);
-                    lastTxPrint = millis();
+#endif
                     txSuccessCount = 0;
                     txFailCount = 0;
                 }
@@ -1059,7 +1101,9 @@ void radioTask(void *param)
 
             if (millis() - lastRxPrint > 2000)
             {
+                lastRxPrint = millis();
                 uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
+#if RADIO_DEBUG
                 uint8_t rxb = radio.SPIgetRegValue(0x3B, 6, 0);
                 uint32_t decodedFrames = playbackDecodedFrames;
                 uint32_t silentFrames = playbackSilentFrames;
@@ -1076,15 +1120,19 @@ void radioTask(void *param)
                               marc, rxb, rxCount, RX_RING_SIZE, currentChannel,
                               (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING),
                               currentChannelEncrypted);
+#endif
                 rxPacketCount = 0;
                 rxUnencCount = 0;
                 rxEncCount = 0;
                 rxUnknownCount = 0;
-                lastRxPrint = millis();
 
+                // Cheap health check kept in the hot path: recover if the radio fell into
+                // RX FIFO overflow (0x11) or a stuck state (0x16).
                 if (marc == 0x11 || marc == 0x16)
                 {
+#if RADIO_DEBUG
                     Serial.printf("RX: error state 0x%02X, recovering\n", marc);
+#endif
                     cc1101_start_rx();
                 }
             }
@@ -1209,7 +1257,7 @@ void playbackTask(void *param)
             if (rxPlaying)
             {
                 underrunCount++;
-                if (underrunCount >= 3)
+                if (underrunCount >= 8)
                 {
                     rxPlaying = false;
                     underrunCount = 0;
@@ -1285,6 +1333,7 @@ void buttonTask(void *param)
             radio.standby();
             radio.SPIsendCommand(0x3B); // SFTX
             radio.SPIsendCommand(0x3A); // SFRX
+            cc1101_calibrate(); // one-time calibration for this transmission (FS_AUTOCAL disabled)
 
             switchToMicPins();
 
@@ -1315,6 +1364,9 @@ void buttonTask(void *param)
             isTransmitting = true;
             txAdpcmState.predicted = 0;
             txAdpcmState.index = 0;
+            fillBuffer = 0;
+            txBufferIndex = 0;
+            for (int i = 0; i < TX_RING_SIZE; i++) bufferReady[i] = false;
             vTaskDelay(pdMS_TO_TICKS(10));
 
             if (displayState != STATE_SCREEN_OFF)
@@ -2149,7 +2201,9 @@ void cc1101_init()
         // Keep the existing CC1101 modulation and packet behavior.
         radio.SPIsetRegValue(0x12, 0x10, 6, 4); // MDMCFG2.MOD_FORMAT = GFSK
         radio.SPIsetRegValue(0x07, 0x00, 2, 2); // PKTCTRL1.APPEND_STATUS = off; keep RX FIFO aligned to 32-byte packets
+        radio.SPIsetRegValue(0x07, 0x01, 3, 3); // PKTCTRL1.CRC_AUTOFLUSH = on; HW drops bad-CRC packets so a single bit error can't desync the 32-byte byte stream
         radio.SPIsetRegValue(0x17, 0x0C, 3, 2); // MCSM1.RXOFF_MODE = stay in RX
+        radio.SPIsetRegValue(0x18, 0x00, 5, 4); // MCSM0.FS_AUTOCAL = never; we calibrate manually (cc1101_calibrate) to avoid recalibrating on every packet
 
         radio.setPacketReceivedAction(cc1101PacketISR);
         cc1101_start_rx();
@@ -2258,7 +2312,7 @@ void setup()
 
     // --- Boot Tasks on Dual Cores ---
     xTaskCreatePinnedToCore(audioCaptureTask, "AudioCapture", 4096, NULL, 3, NULL, 1);
-    xTaskCreatePinnedToCore(radioTask, "RadioTask", 4096, NULL, 3, NULL, 1);   // Highest priority on core 1
+    xTaskCreatePinnedToCore(radioTask, "RadioTask", 4096, NULL, 4, NULL, 1);   // Highest priority on core 1
     xTaskCreatePinnedToCore(playbackTask, "Playback", 4096, NULL, 2, NULL, 1); // Below radio, paced by I2S DMA
     xTaskCreatePinnedToCore(buttonTask, "ButtonTask", 2048, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(volumeReadTask, "VolumeRead", 2048, NULL, 1, NULL, 0);
