@@ -103,6 +103,7 @@ uint8_t dotCount = 0;
 // Timers
 unsigned long lastVolumeChange = 0;
 unsigned long lastReceiveTime = 0;
+unsigned long lastEncryptedSessionTime = 0;
 unsigned long lastAnimUpdate = 0;
 unsigned long startupTime = 0;
 unsigned long lastChannelActivity = 0;
@@ -163,6 +164,8 @@ bool encryptedChannelLookup[MAX_CHANNEL_VALUE + 1] = {};
 #define ENC_SAMPLES_PER_FRAME 40 // samples decoded per encrypted packet
 #define ENC_TAG_SIZE 4           // truncated GCM tag
 #define ENC_COUNTER_SIZE 4       // packet counter field
+#define NONCE_TAG_SIZE 4         // auth tag on session nonce packet
+#define NONCE_BURST_COUNT 3      // repeat session nonce because radio ACKs are disabled
 const uint8_t SHARED_ADDRESS[6] = "Srun";
 
 static inline bool isEncryptedChannel(uint8_t channel)
@@ -254,6 +257,14 @@ void storeEncryptedChannels(String channelList)
     refreshCurrentChannelEncryption();
 }
 
+uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
+volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
+uint8_t radioSessionNonce[8];          // per-PTT session nonce base
+volatile bool sessionNonceValid = false;
+uint8_t txNoncePacket[PACKET_SIZE];
+volatile bool txNoncePending = false;
+volatile uint8_t txNonceBurstRemaining = 0;
+
 void changeChannel(int8_t direction)
 {
     if (direction < 0)
@@ -266,6 +277,9 @@ void changeChannel(int8_t direction)
     }
 
     refreshCurrentChannelEncryption();
+    initRadioEncryption();
+    sessionNonceValid = false;
+    lastEncryptedSessionTime = 0;
     channelUpdatePending = true;
     lastChannelActivity = millis();
 }
@@ -389,7 +403,7 @@ String b64encode(const unsigned char *input, size_t len)
     return String((char *)out).substring(0, out_len);
 }
 
-bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecodedLength = 128)
+bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecodedLength = 1024)
 {
     if (encoded.length() == 0)
     {
@@ -397,7 +411,7 @@ bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecoded
         return true;
     }
 
-    unsigned char buffer[128];
+    unsigned char buffer[1024];
     size_t decodedLength = 0;
     if (maxDecodedLength > sizeof(buffer) - 1)
     {
@@ -421,17 +435,31 @@ bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecoded
     return true;
 }
 
+String getChannelSalt(uint8_t ch)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "s_%d", ch);
+    return preferences.getString(key, "");
+}
+
+void setChannelSalt(uint8_t ch, const String &salt)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "s_%d", ch);
+    if (salt.length() > 0)
+    {
+        preferences.putString(key, salt);
+    }
+    else
+    {
+        preferences.remove(key);
+    }
+}
+
 // =================================================================
 // RADIO AES-GCM ENCRYPTION
 // =================================================================
-uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
-volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
-uint8_t radioSessionNonce[8];          // per-PTT session nonce base
-volatile bool sessionNonceValid = false;
-uint8_t txNoncePacket[PACKET_SIZE];
-volatile bool txNoncePending = false;
-
-// Derive radioKey deterministically from the stored radio password.
+// Derive radioKey deterministically from the stored radio password and channel salt.
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
 void initRadioEncryption()
 {
@@ -440,19 +468,25 @@ void initRadioEncryption()
 #endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    // Derive Radio Key: Key=storedRadioPassword, Salt=custom Preferences salt or SHA256(storedRadioPassword + suffix)
+    String chSalt = getChannelSalt(currentChannel);
+    if (chSalt.length() == 0 && radioSaltValue.length() > 0)
+    {
+        chSalt = radioSaltValue;
+    }
+
+    // Derive Radio Key: Key=storedRadioPassword, Salt=channel salt or SHA256(storedRadioPassword + suffix)
     uint8_t autoRadioKeySalt[32];
     const unsigned char *radioKeySalt = nullptr;
     size_t radioKeySaltLength = 0;
-    if (radioSaltValue.length() > 0)
+    if (chSalt.length() > 0)
     {
-        radioKeySalt = (const unsigned char *)radioSaltValue.c_str();
-        radioKeySaltLength = radioSaltValue.length();
+        radioKeySalt = (const unsigned char *)chSalt.c_str();
+        radioKeySaltLength = chSalt.length();
     }
     else
     {
         char radioSaltInput[64];
-        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", storedRadioPassword);
+        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, currentChannel);
         mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                    (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
                    autoRadioKeySalt);
@@ -468,6 +502,17 @@ void initRadioEncryption()
 #if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
 #endif
+}
+
+// Compute a 4-byte authentication tag for the session nonce using radioKey HMAC-SHA256
+void computeNonceTag(const uint8_t *nonce8, uint8_t *tag4)
+{
+    uint8_t hmac[32];
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                    radioKey, 32,
+                    nonce8, 8,
+                    hmac);
+    memcpy(tag4, hmac, NONCE_TAG_SIZE);
 }
 
 // Encrypt ENC_PLAINTEXT_SIZE bytes into a 32-byte radio packet.
@@ -528,7 +573,7 @@ bool decryptRadioPacket(const uint8_t *inPkt, uint8_t *outPlaintext)
     nonce[10] = inPkt[3];
     nonce[11] = inPkt[4];
 
-    uint8_t fullTag[16];
+    const uint8_t *tag = inPkt + 1 + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE;
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, radioKey, 256) != 0)
@@ -536,17 +581,18 @@ bool decryptRadioPacket(const uint8_t *inPkt, uint8_t *outPlaintext)
         mbedtls_gcm_free(&gcm);
         return false;
     }
-    int ret = mbedtls_gcm_crypt_and_tag(
-        &gcm, MBEDTLS_GCM_DECRYPT, ENC_PLAINTEXT_SIZE,
-        nonce, 12, NULL, 0,
-        inPkt + 1 + ENC_COUNTER_SIZE, // ciphertext at bytes [5-27]
-        outPlaintext,
-        16, fullTag);
+
+    // The packet stores a truncated 4-byte GCM tag. Validate using the same
+    // truncated length on decrypt so we do not silently accept corrupted audio.
+    int ret = mbedtls_gcm_auth_decrypt(
+        &gcm, ENC_PLAINTEXT_SIZE,
+        nonce, 12,
+        NULL, 0,
+        tag, ENC_TAG_SIZE,
+        inPkt + 1 + ENC_COUNTER_SIZE,
+        outPlaintext);
     mbedtls_gcm_free(&gcm);
-    if (ret != 0)
-        return false;
-    // Verify truncated 4-byte tag
-    return (memcmp(fullTag, inPkt + 1 + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE, ENC_TAG_SIZE) == 0);
+    return (ret == 0);
 }
 
 // =================================================================
@@ -859,6 +905,7 @@ void applyRadioTxMode()
     radio.flush_rx();
     resetTxBufferState();
     txNoncePending = false;
+    txNonceBurstRemaining = 0;
 
     if (currentChannelEncrypted)
     {
@@ -872,7 +919,9 @@ void applyRadioTxMode()
         memset(txNoncePacket, 0, PACKET_SIZE);
         txNoncePacket[0] = NONCE_PACKET_TYPE;
         memcpy(&txNoncePacket[1], radioSessionNonce, 8);
+        computeNonceTag(radioSessionNonce, &txNoncePacket[1 + 8]);
         txNoncePending = true;
+        txNonceBurstRemaining = NONCE_BURST_COUNT;
     }
 #if RADIO_DEBUG
     Serial.print("[Radio] New session nonce: ");
@@ -900,7 +949,9 @@ void applyRadioRxMode()
     radio.startListening();
 
     sessionNonceValid = false;
+    lastEncryptedSessionTime = 0;
     txNoncePending = false;
+    txNonceBurstRemaining = 0;
     resetTxBufferState();
 
     // Reset jitter buffer for clean playback
@@ -964,7 +1015,11 @@ void radioTask(void *param)
             {
                 if (radio.write(txNoncePacket, PACKET_SIZE))
                 {
-                    txNoncePending = false;
+                    if (txNonceBurstRemaining > 0)
+                    {
+                        txNonceBurstRemaining--;
+                    }
+                    txNoncePending = txNonceBurstRemaining > 0;
                     txNonceFails = 0;
                     txFails = 0;
                 }
@@ -1021,19 +1076,30 @@ void radioTask(void *param)
                     {
                         if (currentChannelEncrypted)
                         {
-                            memcpy(radioSessionNonce, &pkt[1], 8);
-                            sessionNonceValid = true;
-#if RADIO_DEBUG
-                            Serial.print("[Radio] Received session nonce: ");
-                            for (int i = 0; i < 8; i++)
+                            uint8_t expectedTag[NONCE_TAG_SIZE];
+                            computeNonceTag(&pkt[1], expectedTag);
+                            if (memcmp(expectedTag, &pkt[1 + 8], NONCE_TAG_SIZE) == 0)
                             {
-                                if (radioSessionNonce[i] < 16)
-                                    Serial.print('0');
-                                Serial.print(radioSessionNonce[i], HEX);
-                            }
-                            Serial.println();
+                                memcpy(radioSessionNonce, &pkt[1], 8);
+                                sessionNonceValid = true;
+                                lastEncryptedSessionTime = millis();
+#if RADIO_DEBUG
+                                Serial.print("[Radio] Received authenticated session nonce: ");
+                                for (int i = 0; i < 8; i++)
+                                {
+                                    if (radioSessionNonce[i] < 16)
+                                        Serial.print('0');
+                                    Serial.print(radioSessionNonce[i], HEX);
+                                }
+                                Serial.println();
 #endif
-                            lastReceiveTime = millis();
+                            }
+#if RADIO_DEBUG
+                            else
+                            {
+                                Serial.println("[Radio] Dropped session nonce with invalid key tag.");
+                            }
+#endif
                         }
                         continue;
                     }
@@ -1048,18 +1114,10 @@ void radioTask(void *param)
                     portENTER_CRITICAL(&rxCountMux);
                     rxCount++;
                     portEXIT_CRITICAL(&rxCountMux);
-                    lastReceiveTime = millis();
-
-                    if (displayState == STATE_IDLE)
-                    {
-                        displayState = STATE_RECEIVE;
-                        dotCount = 0;
-                        lastAnimUpdate = millis();
-                    }
                 }
             }
 
-            if (!isTransmitting && rxCount == 0 && (millis() - lastReceiveTime > RECEIVE_TIMEOUT))
+            if (!isTransmitting && rxCount == 0 && (millis() - lastEncryptedSessionTime > RECEIVE_TIMEOUT))
             {
                 sessionNonceValid = false;
             }
@@ -1144,52 +1202,66 @@ void playbackTask(void *param)
                 decoded = true;
             }
 
-            if (!decoded)
-            {
-                // Unknown packet type or decrypt failure — output silence
-                memset(pcmOut, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
-            }
-
-            if (packetType != lastPacketType)
-            {
-                // Reset DMA when switching packet types to avoid I2S lockups
-                i2s_zero_dma_buffer(I2S_NUM_0);
-                lastPacketType = packetType;
-            }
-
-            for (int i = 0; i < samplesOut; i++)
-            {
-                int32_t sample = pcmOut[i];
-                sample = (sample * currentGain) >> 8;
-                sample = softLimiter(sample, LIMIT_POST);
-                int16_t out = (int16_t)sample;
-                stereoBuf[i * 2] = out;
-                stereoBuf[i * 2 + 1] = out;
-            }
+            // Advance the ring buffer regardless of decode success
             rxTail = (rxTail + 1) % RX_RING_SIZE;
             portENTER_CRITICAL(&rxCountMux);
             rxCount--;
             portEXIT_CRITICAL(&rxCountMux);
-            underrunCount = 0;
-            digitalWrite(LED_PIN, HIGH);
+
+            if (decoded)
+            {
+                // Only update UI state & LED when we actually decoded audio
+                lastReceiveTime = millis();
+                if (packetType == ENC_PACKET_TYPE)
+                {
+                    lastEncryptedSessionTime = lastReceiveTime;
+                }
+                if (displayState == STATE_IDLE)
+                {
+                    displayState = STATE_RECEIVE;
+                    dotCount = 0;
+                    lastAnimUpdate = millis();
+                }
+
+                if (packetType != lastPacketType)
+                {
+                    // Reset DMA when switching packet types to avoid I2S lockups
+                    i2s_zero_dma_buffer(I2S_NUM_0);
+                    lastPacketType = packetType;
+                }
+
+                for (int i = 0; i < samplesOut; i++)
+                {
+                    int32_t sample = pcmOut[i];
+                    sample = (sample * currentGain) >> 8;
+                    sample = softLimiter(sample, LIMIT_POST);
+                    int16_t out = (int16_t)sample;
+                    stereoBuf[i * 2] = out;
+                    stereoBuf[i * 2 + 1] = out;
+                }
+                underrunCount = 0;
+                digitalWrite(LED_PIN, HIGH);
+                i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
+            }
+            else
+            {
+                // Decrypt failure (wrong key) — silently skip, don't feed silence to I2S
+                continue;
+            }
         }
         else
         {
-            // Underrun — output silence but tolerate brief gaps
             memset(stereoBuf, 0, sizeof(stereoBuf));
-            if (rxPlaying)
+            underrunCount++;
+            if (underrunCount >= 3)
             {
-                underrunCount++;
-                if (underrunCount >= 3)
-                {
-                    rxPlaying = false;
-                    underrunCount = 0;
-                }
+                rxPlaying = false;
+                underrunCount = 0;
             }
+            i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
             digitalWrite(LED_PIN, LOW);
+            vTaskDelay(1);
         }
-        // i2s_write paces playback naturally
-        i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
     }
 }
 
@@ -2134,6 +2206,42 @@ void usbHandshakeTask(void *param)
                         Serial.println("Failed to store radio salt.");
                     }
                 }
+                else if (msg.startsWith("channel_salts_b64:"))
+                {
+                    String encodedSalts = msg.substring(strlen("channel_salts_b64:"));
+                    String decodedSalts = "";
+                    if (decodeB64ToString(encodedSalts, decodedSalts, 1024))
+                    {
+                        StaticJsonDocument<1024> doc;
+                        DeserializationError err = deserializeJson(doc, decodedSalts);
+                        if (!err)
+                        {
+                            JsonObject obj = doc.as<JsonObject>();
+                            for (uint8_t ch = MIN_CHANNEL_VALUE; ch <= MAX_CHANNEL_VALUE; ch++)
+                            {
+                                String key = String(ch);
+                                if (obj.containsKey(key))
+                                {
+                                    setChannelSalt(ch, obj[key].as<String>());
+                                }
+                                else
+                                {
+                                    setChannelSalt(ch, "");
+                                }
+                            }
+                            initRadioEncryption();
+                            Serial.println("Channel salts stored.");
+                        }
+                        else
+                        {
+                            Serial.println("Failed to parse channel salts JSON.");
+                        }
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store channel salts.");
+                    }
+                }
                 else if (msg.startsWith("encrypted_channels:"))
                 {
                     String channelList = msg.substring(strlen("encrypted_channels:"));
@@ -2211,16 +2319,27 @@ void usbHandshakeTask(void *param)
 
                 mbedtls_gcm_free(&gcm);
 
-                StaticJsonDocument<1024> out;
+                StaticJsonDocument<2048> out;
                 bool passwordConfigured = devicePassword.length() > 0;
 
                 out["device"] = deviceName;
                 out["password_enabled"] = passwordConfigured;
                 out["radio_salt"] = radioSaltValue;
+                out["min_channel"] = MIN_CHANNEL_VALUE;
+                out["max_channel"] = MAX_CHANNEL_VALUE;
                 JsonArray encryptedChannelJson = out.createNestedArray("encrypted_channels");
                 for (uint8_t i = 0; i < encryptedChannelCount; i++)
                 {
                     encryptedChannelJson.add(encryptedChannels[i]);
+                }
+                JsonObject channelSaltsJson = out.createNestedObject("channel_salts");
+                for (uint8_t ch = MIN_CHANNEL_VALUE; ch <= MAX_CHANNEL_VALUE; ch++)
+                {
+                    String s = getChannelSalt(ch);
+                    if (s.length() > 0)
+                    {
+                        channelSaltsJson[String(ch)] = s;
+                    }
                 }
                 out["salt"] = b64encode(salt, 16);
                 out["nonce"] = b64encode(nonce, 12);
@@ -2260,6 +2379,8 @@ void usbHandshakeTask(void *param)
 // =================================================================
 // 7. MAIN HARDWARE SETUP
 // =================================================================
+
+const bool RESET_NVS_ON_BOOT = false;
 
 void setup()
 {
@@ -2302,13 +2423,22 @@ void setup()
     
     startupTime = millis();
     preferences.begin("walkie", false);
-    // Clear stored settings once after each new upload.
-    String storedBuildId = preferences.getString("build_id", "");
-    if (storedBuildId != BUILD_ID)
+
+    if (RESET_NVS_ON_BOOT)
     {
         preferences.clear();
         preferences.putString("build_id", BUILD_ID);
+        Serial.println("NVS reset enabled in code. Stored settings cleared.");
     }
+    else
+    {
+        String storedBuildId = preferences.getString("build_id", "");
+        if (storedBuildId != BUILD_ID)
+        {
+            preferences.putString("build_id", BUILD_ID);
+        }
+    }
+
     deviceName = preferences.getString("device_name", "Walkie-Talkie");
     updateDeviceMessage();
     devicePassword = preferences.getString("device_pwd", "");
@@ -2316,7 +2446,6 @@ void setup()
     radioSaltValue = preferences.getString("radio_salt", "");
     attemptDecryptOnUnencrypted = preferences.getBool("attempt_dec", false);
     loadEncryptedChannels();
-    initRadioEncryption(); // Derive radio key & nonce from the stored radio password.
     // --- GPIO Setup ---
     pinMode(BUTTON, INPUT_PULLUP);
     pinMode(BTN_LEFT, INPUT_PULLUP);
@@ -2332,6 +2461,7 @@ void setup()
         currentChannel = MIN_CHANNEL_VALUE;
     savedChannel = currentChannel;
     refreshCurrentChannelEncryption();
+    initRadioEncryption(); // Derive radio key after the saved channel is known.
 
     // --- SPI Radio Setup ---
     spiNRF.begin(NRF_SCK, NRF_MISO, NRF_MOSI, CSN_PIN);

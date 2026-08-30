@@ -3,6 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <SPI.h>
+#define RADIOLIB_DEBUG_BASIC 1
 #include <RadioLib.h>
 #include <driver/i2s.h>
 #include "freertos/FreeRTOS.h"
@@ -47,10 +48,10 @@
 #define CC1101_SCK   14
 #define CC1101_MISO  12
 #define CC1101_MOSI  13
-#define CC1101_GDO0  35
+#define CC1101_GDO0  2
 #define CC1101_CS    4
 
-#define RADIO_DEBUG 0
+#define RADIO_DEBUG 1
 
 // =================================================================
 // 2. GLOBAL VARIABLES & STATES
@@ -116,7 +117,7 @@ const unsigned long RAPID_CHANNEL_SWITCH_TIME = 100;
 // Radio & Buffers
 uint8_t currentChannel = 1;
 volatile bool channelUpdatePending = false;
-const uint8_t MAX_CHANNEL_VALUE = 50;
+const uint8_t MAX_CHANNEL_VALUE = 31; // 433 + 31 = 464 MHz, the CC1101 band limit
 const uint8_t MIN_CHANNEL_VALUE = 1;
 const float CHANNEL_SPACING = 1.0; // MHz
 #define BASE_FREQUENCY 433 // MHz
@@ -147,6 +148,7 @@ bool encryptedChannelLookup[MAX_CHANNEL_VALUE + 1] = {};
 #define ENC_SAMPLES_PER_FRAME 40 // samples decoded per encrypted packet
 #define ENC_TAG_SIZE 4           // truncated GCM tag
 #define ENC_COUNTER_SIZE 4       // packet counter field
+#define NONCE_TAG_SIZE 4         // auth tag on session nonce packet
 
 static inline bool isEncryptedChannel(uint8_t channel)
 {
@@ -291,6 +293,43 @@ volatile uint8_t txBufferIndex = 0;
 volatile int txFails = 0;
 volatile bool isTransmitting = false;
 
+// The CC1101 object belongs to radioTask alone. Any other task that needs a mode
+// change posts it here instead of driving the radio itself.
+enum RadioRequest : uint8_t
+{
+    RADIO_REQ_NONE = 0,
+    RADIO_REQ_TX,
+    RADIO_REQ_RX
+};
+volatile uint8_t radioRequest = RADIO_REQ_NONE;
+const int RADIO_REQ_TIMEOUT_TICKS = 200;
+
+void resetTxBufferState()
+{
+    for (int i = 0; i < TX_RING_SIZE; i++)
+    {
+        bufferReady[i] = false;
+    }
+    fillBuffer = 0;
+    txBufferIndex = 0;
+    txFails = 0;
+}
+
+bool requestRadioMode(uint8_t request)
+{
+    radioRequest = request;
+    for (int i = 0; i < RADIO_REQ_TIMEOUT_TICKS && radioRequest != RADIO_REQ_NONE; i++)
+    {
+        vTaskDelay(1);
+    }
+    if (radioRequest != RADIO_REQ_NONE)
+    {
+        radioRequest = RADIO_REQ_NONE;
+        return false;
+    }
+    return true;
+}
+
 // Receive-side jitter ring buffer
 #define RX_RING_SIZE 32
 #define RX_PREFILL 2 // How many packets to fill before sending to amp
@@ -345,7 +384,7 @@ String b64encode(const unsigned char *input, size_t len)
     return String((char *)out).substring(0, out_len);
 }
 
-bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecodedLength = 128)
+bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecodedLength = 1024)
 {
     if (encoded.length() == 0)
     {
@@ -353,7 +392,7 @@ bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecoded
         return true;
     }
 
-    unsigned char buffer[128];
+    unsigned char buffer[1024];
     size_t decodedLength = 0;
     if (maxDecodedLength > sizeof(buffer) - 1)
     {
@@ -377,6 +416,27 @@ bool decodeB64ToString(const String &encoded, String &decoded, size_t maxDecoded
     return true;
 }
 
+String getChannelSalt(uint8_t ch)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "s_%d", ch);
+    return preferences.getString(key, "");
+}
+
+void setChannelSalt(uint8_t ch, const String &salt)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "s_%d", ch);
+    if (salt.length() > 0)
+    {
+        preferences.putString(key, salt);
+    }
+    else
+    {
+        preferences.remove(key);
+    }
+}
+
 // =================================================================
 // RADIO AES-GCM ENCRYPTION
 // =================================================================
@@ -388,7 +448,7 @@ volatile bool sessionNonceValid = false;
 uint8_t txNoncePacket[PACKET_SIZE];
 volatile bool txNoncePending = false;
 
-// Derive radioKey and radioBaseNonce deterministically from the stored radio password.
+// Derive radioKey and radioBaseNonce deterministically from the stored radio password and channel salt.
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
 void initRadioEncryption()
 {
@@ -397,19 +457,25 @@ void initRadioEncryption()
 #endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=custom Preferences salt or SHA256(storedRadioPassword + suffix)
+    String chSalt = getChannelSalt(currentChannel);
+    if (chSalt.length() == 0 && radioSaltValue.length() > 0)
+    {
+        chSalt = radioSaltValue;
+    }
+
+    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=channel salt or SHA256(storedRadioPassword + suffix)
     uint8_t autoRadioKeySalt[32];
     const unsigned char *radioKeySalt = nullptr;
     size_t radioKeySaltLength = 0;
-    if (radioSaltValue.length() > 0)
+    if (chSalt.length() > 0)
     {
-        radioKeySalt = (const unsigned char *)radioSaltValue.c_str();
-        radioKeySaltLength = radioSaltValue.length();
+        radioKeySalt = (const unsigned char *)chSalt.c_str();
+        radioKeySaltLength = chSalt.length();
     }
     else
     {
         char radioSaltInput[64];
-        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|radio_salt", storedRadioPassword);
+        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, currentChannel);
         mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                    (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
                    autoRadioKeySalt);
@@ -425,7 +491,7 @@ void initRadioEncryption()
     // 2. Derive Nonce Base: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
     uint8_t nonceSalt[32];
     char nonceSaltInput[64];
-    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|radio_salt_nonce", storedRadioPassword);
+    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|ch_%d|radio_salt_nonce", storedRadioPassword, currentChannel);
     mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                (const unsigned char *)nonceSaltInput, strlen(nonceSaltInput),
                nonceSalt);
@@ -441,6 +507,17 @@ void initRadioEncryption()
 #if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
 #endif
+}
+
+// Compute a 4-byte authentication tag for the session nonce using radioKey HMAC-SHA256
+void computeNonceTag(const uint8_t *nonce8, uint8_t *tag4)
+{
+    uint8_t hmac[32];
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                    radioKey, 32,
+                    nonce8, 8,
+                    hmac);
+    memcpy(tag4, hmac, NONCE_TAG_SIZE);
 }
 
 // Encrypt ENC_PLAINTEXT_SIZE bytes into a 32-byte radio packet.
@@ -746,43 +823,45 @@ bool cc1101_read(uint8_t *buf, uint8_t len)
     {
         radio.standby();
         radio.SPIsendCommand(0x3A); // SFRX
-        radio.startReceive();
-        return false;
     }
-    return true;
+    // RadioLib's readData() leaves the CC1101 in IDLE after every read.
+    // We MUST re-arm RX so the radio keeps listening for the next packet.
+    radio.startReceive();
+    return state == RADIOLIB_ERR_NONE;
 }
 
 bool cc1101_write(const uint8_t *buf, uint8_t len)
 {
-    // Clear any stale notifications so we only wait for the *new* TX interrupt
-    cc1101PacketInterrupt = false;
-    ulTaskNotifyTake(pdTRUE, 0);
+    // Put radio into IDLE first, flush TX FIFO, then transmit
+    radio.standby();
+    radio.SPIsendCommand(0x3B); // SFTX — flush any stale TX data
 
     int state = radio.startTransmit((uint8_t *)buf, len);
-    if (state == RADIOLIB_ERR_NONE)
+    if (state != RADIOLIB_ERR_NONE)
     {
-        // Block this task until the GDO0 pin triggers the ISR (end of transmission).
-        // This yields the CPU entirely to other tasks, exactly like nRF's radio.write!
-        // At 250kbps, a 32-byte packet takes ~1.5ms. We allow up to 10ms.
-        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)) == pdFALSE && !cc1101PacketInterrupt)
-        {
-            // Fallback: poll the GPIO pin directly (much faster than SPI), then check MARCSTATE
-            unsigned long startTx = millis();
-            while (digitalRead(CC1101_GDO0) || radio.SPIgetRegValue(0x35, 4, 0) != 0x01)
-            {
-                taskYIELD();
-                if (millis() - startTx > 10)
-                {
-                    state = RADIOLIB_ERR_TX_TIMEOUT;
-                    break;
-                }
-            }
-        }
+        return false;
     }
 
-    cc1101PacketInterrupt = false;
-    radio.standby();
-    radio.SPIsendCommand(0x3B); // SFTX
+    // Wait for TX to complete by polling MARCSTATE.
+    // At 250 kbps a 32-byte packet takes ~1.5 ms. We allow up to 15 ms.
+    // MARCSTATE values: 0x13 = TX, 0x01 = IDLE (TX done).
+    unsigned long startTx = millis();
+    while (true)
+    {
+        uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
+        if (marc == 0x01)
+        {
+            break; // TX finished, radio returned to IDLE
+        }
+        if (millis() - startTx > 15)
+        {
+            state = RADIOLIB_ERR_TX_TIMEOUT;
+            radio.standby();
+            break;
+        }
+        taskYIELD();
+    }
+
     return state == RADIOLIB_ERR_NONE;
 }
 
@@ -934,7 +1013,8 @@ void audioCaptureTask(void *param)
     }
 }
 
-// Radio-only task: handles TX and RX without ever blocking on I2S
+// Radio-only task: handles TX and RX without ever blocking on I2S.
+// This is the ONLY task that touches the CC1101 SPI bus.
 void radioTask(void *param)
 {
     radioTaskHandle = xTaskGetCurrentTaskHandle();
@@ -949,6 +1029,25 @@ void radioTask(void *param)
 
     while (1)
     {
+        // --- Handle mode-switch requests from buttonTask (runs on Core 0) ---
+        uint8_t req = radioRequest;
+        if (req == RADIO_REQ_TX)
+        {
+            // Transition radio into TX-ready state
+            radio.standby();
+            radio.SPIsendCommand(0x3B); // SFTX
+            radio.SPIsendCommand(0x3A); // SFRX
+            cc1101_calibrate();
+            radioRequest = RADIO_REQ_NONE; // signal back to buttonTask
+        }
+        else if (req == RADIO_REQ_RX)
+        {
+            // Transition radio back to RX
+            radio.SPIsendCommand(0x3B); // SFTX
+            cc1101_start_rx();
+            radioRequest = RADIO_REQ_NONE; // signal back to buttonTask
+        }
+
         if (channelUpdatePending)
         {
             cc1101_start_rx();
@@ -1031,9 +1130,23 @@ void radioTask(void *param)
                     {
                         if (currentChannelEncrypted)
                         {
-                            memcpy(radioSessionNonce, &pkt[1], 8);
-                            sessionNonceValid = true;
-                            lastReceiveTime = millis();
+                            // Authenticate the nonce packet with HMAC tag
+                            uint8_t expectedTag[NONCE_TAG_SIZE];
+                            computeNonceTag(&pkt[1], expectedTag);
+                            if (memcmp(expectedTag, &pkt[9], NONCE_TAG_SIZE) == 0)
+                            {
+                                memcpy(radioSessionNonce, &pkt[1], 8);
+                                sessionNonceValid = true;
+#if RADIO_DEBUG
+                                Serial.println("[Radio] Nonce authenticated OK");
+#endif
+                            }
+                            else
+                            {
+#if RADIO_DEBUG
+                                Serial.println("[Radio] Nonce tag mismatch — dropped (wrong key?)");
+#endif
+                            }
                         }
                         continue;
                     }
@@ -1082,15 +1195,7 @@ void radioTask(void *param)
                     portENTER_CRITICAL(&rxCountMux);
                     rxCount++;
                     portEXIT_CRITICAL(&rxCountMux);
-                    lastReceiveTime = millis();
                     rxPacketCount++;
-
-                    if (displayState == STATE_IDLE)
-                    {
-                        displayState = STATE_RECEIVE;
-                        dotCount = 0;
-                        lastAnimUpdate = millis();
-                    }
                 }
             }
 
@@ -1195,6 +1300,7 @@ void playbackTask(void *param)
                     samplesOut = ENC_SAMPLES_PER_FRAME;
                     decoded = true;
                 }
+                // If decryption failed (wrong key), decoded stays false → silently dropped
             }
             else if (isEncPkt && !channelEncrypted)
             {
@@ -1221,34 +1327,47 @@ void playbackTask(void *param)
                 decoded = true;
             }
 
-            if (!decoded)
-            {
-                // Unknown packet type or decrypt failure — output silence
-                memset(pcmOut, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
-            }
-
-            if (packetType != lastPacketType)
-            {
-                // Reset DMA when switching packet types to avoid I2S lockups
-                i2s_zero_dma_buffer(I2S_NUM_0);
-                lastPacketType = packetType;
-            }
-
-            for (int i = 0; i < samplesOut; i++)
-            {
-                int32_t sample = pcmOut[i];
-                sample = (sample * currentGain) >> 8;
-                sample = softLimiter(sample, LIMIT_POST);
-                int16_t out = (int16_t)sample;
-                stereoBuf[i * 2] = out;
-                stereoBuf[i * 2 + 1] = out;
-            }
+            // Advance the ring buffer regardless of decode success
             rxTail = (rxTail + 1) % RX_RING_SIZE;
             portENTER_CRITICAL(&rxCountMux);
             rxCount--;
             portEXIT_CRITICAL(&rxCountMux);
-            underrunCount = 0;
-            digitalWrite(LED_PIN, HIGH);
+
+            if (decoded)
+            {
+                // Only update UI state & LED when we actually decoded audio
+                lastReceiveTime = millis();
+                if (displayState == STATE_IDLE)
+                {
+                    displayState = STATE_RECEIVE;
+                    dotCount = 0;
+                    lastAnimUpdate = millis();
+                }
+
+                if (packetType != lastPacketType)
+                {
+                    // Reset DMA when switching packet types to avoid I2S lockups
+                    i2s_zero_dma_buffer(I2S_NUM_0);
+                    lastPacketType = packetType;
+                }
+
+                for (int i = 0; i < samplesOut; i++)
+                {
+                    int32_t sample = pcmOut[i];
+                    sample = (sample * currentGain) >> 8;
+                    sample = softLimiter(sample, LIMIT_POST);
+                    int16_t out = (int16_t)sample;
+                    stereoBuf[i * 2] = out;
+                    stereoBuf[i * 2 + 1] = out;
+                }
+                underrunCount = 0;
+                digitalWrite(LED_PIN, HIGH);
+            }
+            else
+            {
+                // Decrypt failure (wrong key) — silently skip, don't feed silence to I2S
+                continue;
+            }
         }
         else
         {
@@ -1330,10 +1449,10 @@ void buttonTask(void *param)
         if (pressed && !isTransmitting && !isProgramMode && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
             lastPttChange = now;
-            radio.standby();
-            radio.SPIsendCommand(0x3B); // SFTX
-            radio.SPIsendCommand(0x3A); // SFRX
-            cc1101_calibrate(); // one-time calibration for this transmission (FS_AUTOCAL disabled)
+
+            // Ask radioTask (Core 1) to transition the CC1101 into TX-ready state.
+            // This avoids SPI bus collisions between Core 0 and Core 1.
+            requestRadioMode(RADIO_REQ_TX);
 
             switchToMicPins();
 
@@ -1349,6 +1468,8 @@ void buttonTask(void *param)
                 memset(txNoncePacket, 0, PACKET_SIZE);
                 txNoncePacket[0] = NONCE_PACKET_TYPE;
                 memcpy(&txNoncePacket[1], radioSessionNonce, 8);
+                // Attach HMAC auth tag so the receiver can verify the nonce came from a matching key
+                computeNonceTag(radioSessionNonce, &txNoncePacket[9]);
                 txNoncePending = true;
             }
 #if RADIO_DEBUG
@@ -1364,9 +1485,7 @@ void buttonTask(void *param)
             isTransmitting = true;
             txAdpcmState.predicted = 0;
             txAdpcmState.index = 0;
-            fillBuffer = 0;
-            txBufferIndex = 0;
-            for (int i = 0; i < TX_RING_SIZE; i++) bufferReady[i] = false;
+            resetTxBufferState();
             vTaskDelay(pdMS_TO_TICKS(10));
 
             if (displayState != STATE_SCREEN_OFF)
@@ -1381,18 +1500,18 @@ void buttonTask(void *param)
         {
             lastPttChange = now;
 
+            // Stop transmitting first so radioTask stops sending packets
+            isTransmitting = false;
+            txNoncePending = false;
+            sessionNonceValid = false;
+
             i2s_stop(I2S_NUM_0);
             switchToSpeakerPins();
             i2s_zero_dma_buffer(I2S_NUM_0);
             i2s_start(I2S_NUM_0);
 
-            isTransmitting = false;
-            radio.SPIsendCommand(0x3B); // SFTX
-            cc1101_start_rx();
-            vTaskDelay(pdMS_TO_TICKS(10));
-
-            sessionNonceValid = false;
-            txNoncePending = false;
+            // Ask radioTask (Core 1) to transition the CC1101 back to RX mode
+            requestRadioMode(RADIO_REQ_RX);
 
             // Reset jitter buffer for clean playback
             rxHead = 0;
@@ -2057,6 +2176,42 @@ void usbHandshakeTask(void *param)
                         Serial.println("Failed to store radio salt.");
                     }
                 }
+                else if (msg.startsWith("channel_salts_b64:"))
+                {
+                    String encodedSalts = msg.substring(strlen("channel_salts_b64:"));
+                    String decodedSalts = "";
+                    if (decodeB64ToString(encodedSalts, decodedSalts, 1024))
+                    {
+                        StaticJsonDocument<1024> doc;
+                        DeserializationError err = deserializeJson(doc, decodedSalts);
+                        if (!err)
+                        {
+                            JsonObject obj = doc.as<JsonObject>();
+                            for (uint8_t ch = MIN_CHANNEL_VALUE; ch <= MAX_CHANNEL_VALUE; ch++)
+                            {
+                                String key = String(ch);
+                                if (obj.containsKey(key))
+                                {
+                                    setChannelSalt(ch, obj[key].as<String>());
+                                }
+                                else
+                                {
+                                    setChannelSalt(ch, "");
+                                }
+                            }
+                            initRadioEncryption();
+                            Serial.println("Channel salts stored.");
+                        }
+                        else
+                        {
+                            Serial.println("Failed to parse channel salts JSON.");
+                        }
+                    }
+                    else
+                    {
+                        Serial.println("Failed to store channel salts.");
+                    }
+                }
                 else if (msg.startsWith("encrypted_channels:"))
                 {
                     String channelList = msg.substring(strlen("encrypted_channels:"));
@@ -2134,16 +2289,27 @@ void usbHandshakeTask(void *param)
 
                 mbedtls_gcm_free(&gcm);
 
-                StaticJsonDocument<1024> out;
+                StaticJsonDocument<2048> out;
                 bool passwordConfigured = devicePassword.length() > 0;
 
                 out["device"] = deviceName;
                 out["password_enabled"] = passwordConfigured;
                 out["radio_salt"] = radioSaltValue;
+                out["min_channel"] = MIN_CHANNEL_VALUE;
+                out["max_channel"] = MAX_CHANNEL_VALUE;
                 JsonArray encryptedChannelJson = out.createNestedArray("encrypted_channels");
                 for (uint8_t i = 0; i < encryptedChannelCount; i++)
                 {
                     encryptedChannelJson.add(encryptedChannels[i]);
+                }
+                JsonObject channelSaltsJson = out.createNestedObject("channel_salts");
+                for (uint8_t ch = MIN_CHANNEL_VALUE; ch <= MAX_CHANNEL_VALUE; ch++)
+                {
+                    String s = getChannelSalt(ch);
+                    if (s.length() > 0)
+                    {
+                        channelSaltsJson[String(ch)] = s;
+                    }
                 }
                 out["salt"] = b64encode(salt, 16);
                 out["nonce"] = b64encode(nonce, 12);
@@ -2187,6 +2353,13 @@ void cc1101_init()
     const float rxBandwidth = 540.0; // kHz
     const int8_t radio_power = 10; // dBm
 
+    if (currentChannel < MIN_CHANNEL_VALUE || currentChannel > MAX_CHANNEL_VALUE)
+    {
+        Serial.println(F("Stored channel out of band, resetting to CH1"));
+        currentChannel = MIN_CHANNEL_VALUE;
+        refreshCurrentChannelEncryption();
+    }
+
     int state = radio.begin(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING, bitrate, frequency_deviation, rxBandwidth, radio_power, 32);
     if (state == RADIOLIB_ERR_NONE)
     {
@@ -2212,6 +2385,14 @@ void cc1101_init()
     {
         Serial.print(F("CC1101 init failed, code "));
         Serial.println(state);
+        if (state == RADIOLIB_ERR_INVALID_FREQUENCY)
+        {
+            Serial.println(F("Frequency outside 387-464 MHz band"));
+        }
+        else if (state == RADIOLIB_ERR_CHIP_NOT_FOUND)
+        {
+            Serial.println(F("Check CC1101 wiring/power (VCC=3.3V, SCK/MISO/MOSI/CS/GDO0)"));
+        }
     }
 }
 

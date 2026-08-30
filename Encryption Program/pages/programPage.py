@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QPointF
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPen, QColor
 from pathlib import Path
+import json
 import base64
 import re
 import serial
@@ -15,10 +16,7 @@ import time
 class ProgramPage(QWidget):
 	back_to_login = pyqtSignal()
 	back_to_start = pyqtSignal()
-	INO_PATH = Path(__file__).resolve().parents[1] / "nRF_Walkie_talkie_encryption" / "nRF_Walkie_talkie_encryption.ino"
-	SKETCH_DIR = INO_PATH.parent
-	ARDUINO_FQBN = "esp32:esp32:esp32"
-	DEFAULT_MIN_CHANNEL = 80
+	DEFAULT_MIN_CHANNEL = 1
 	DEFAULT_MAX_CHANNEL = 125
 
 	def __init__(self):
@@ -30,6 +28,8 @@ class ProgramPage(QWidget):
 		self._max_channel = self.DEFAULT_MAX_CHANNEL
 		self._encrypted_channels = set()
 		self._saved_encrypted_channels = set()
+		self._channel_salts = {}
+		self._saved_channel_salts = {}
 		self._updating_channels = False
 		self._upload_port = ""
 		self._serial_connection = None
@@ -108,11 +108,11 @@ class ProgramPage(QWidget):
 		self.encryption_form.setVerticalSpacing(12)
 
 		self.salt_input = QLineEdit()
-		self.salt_input.setPlaceholderText("(Optional) Auto-generated if not filled in")
+		self.salt_input.setPlaceholderText("(Optional) Unique salt for this channel")
 		self.salt_input.setMinimumHeight(34)
 		self.salt_input.textChanged.connect(self._on_salt_changed)
 
-		self.encryption_form.addRow("Set salt:", self.salt_input)
+		self.encryption_form.addRow("Set Salt:", self.salt_input)
 		self.encryption_layout.addLayout(self.encryption_form)
 
 		self.channel_status_label = QLabel("")
@@ -196,43 +196,42 @@ class ProgramPage(QWidget):
 		self._saved_encrypted_channels = set(self._encrypted_channels)
 		self._populate_channel_list()
 
+	def set_channel_salts(self, salts: dict):
+		self._channel_salts = {int(k): str(v) for k, v in (salts or {}).items()}
+		self._saved_channel_salts = dict(self._channel_salts)
+		self._sync_encryption_checkbox()
+
 	def set_radio_salt(self, salt: str):
 		self._radio_salt = salt or ""
 		self._saved_radio_salt = self._radio_salt
-		self._updating_salt = True
-		self.salt_input.setText(self._radio_salt)
-		self._updating_salt = False
 		self._update_set_configuration_button()
 
+	def set_channel_range(self, min_channel: int, max_channel: int):
+		self._min_channel = int(min_channel)
+		self._max_channel = int(max_channel)
+		self._encrypted_channels = {
+			ch for ch in self._encrypted_channels
+			if self._min_channel <= ch <= self._max_channel
+		}
+		self._saved_encrypted_channels = set(self._encrypted_channels)
+		self._populate_channel_list()
+
 	def reload_channel_config(self):
-		self._min_channel, self._max_channel = self._read_ino_channel_config()
 		self._encrypted_channels = set()
 		self._saved_encrypted_channels = set()
+		self._channel_salts = {}
+		self._saved_channel_salts = {}
 		self._populate_channel_list()
 
 	def load_preview_data(self):
-		self._min_channel = 80
-		self._max_channel = 90
-		self._encrypted_channels = {80, 83, 88}
+		self._min_channel = 1
+		self._max_channel = 10
+		self._encrypted_channels = {1, 3, 8}
 		self._saved_encrypted_channels = set(self._encrypted_channels)
+		self._channel_salts = {1: "alpha_salt", 3: "beta_salt", 8: "gamma_salt"}
+		self._saved_channel_salts = dict(self._channel_salts)
 		self._populate_channel_list()
 		self._set_channel_status("Preview mode: showing sample data.")
-
-	def _read_ino_channel_config(self):
-		if not self.INO_PATH.exists():
-			self.channel_status_label.setText(f"Could not find sketch: {self.INO_PATH}")
-			return self.DEFAULT_MIN_CHANNEL, self.DEFAULT_MAX_CHANNEL
-
-		source = self.INO_PATH.read_text(encoding="utf-8")
-		min_channel = self._read_uint8_constant(source, "MIN_CHANNEL_VALUE", self.DEFAULT_MIN_CHANNEL)
-		max_channel = self._read_uint8_constant(source, "MAX_CHANNEL_VALUE", self.DEFAULT_MAX_CHANNEL)
-		return min_channel, max_channel
-
-	def _read_uint8_constant(self, source: str, name: str, fallback: int):
-		match = re.search(rf"const\s+uint8_t\s+{name}\s*=\s*(\d+)\s*;", source)
-		if not match:
-			return fallback
-		return int(match.group(1))
 
 	def _populate_channel_list(self):
 		self._updating_channels = True
@@ -270,6 +269,7 @@ class ProgramPage(QWidget):
 			return
 
 		self._set_channel_encryption(current, checked)
+		self.salt_input.setEnabled(checked and not self._is_preview)
 
 	def _set_channel_encryption(self, item: QListWidgetItem, enabled: bool):
 		channel_number = item.data(Qt.ItemDataRole.UserRole)
@@ -296,18 +296,28 @@ class ProgramPage(QWidget):
 	def _sync_encryption_checkbox(self):
 		current = self.channel_list.currentItem()
 		self._updating_channels = True
+		self._updating_salt = True
 		if current:
 			channel_number = current.data(Qt.ItemDataRole.UserRole)
-			self.enable_encryption_checkbox.setEnabled(not self._is_preview)
-			self.enable_encryption_checkbox.setChecked(int(channel_number) in self._encrypted_channels)
+			if channel_number is not None:
+				ch = int(channel_number)
+				is_enc = ch in self._encrypted_channels
+				self.enable_encryption_checkbox.setEnabled(not self._is_preview)
+				self.enable_encryption_checkbox.setChecked(is_enc)
+				self.salt_input.setEnabled(is_enc and not self._is_preview)
+				self.salt_input.setText(self._channel_salts.get(ch, ""))
 		else:
 			self.enable_encryption_checkbox.setEnabled(False)
 			self.enable_encryption_checkbox.setChecked(False)
+			self.salt_input.setEnabled(False)
+			self.salt_input.clear()
+		self._updating_salt = False
 		self._updating_channels = False
 
 	def _has_unsaved_changes(self):
 		return (
 			self._encrypted_channels != self._saved_encrypted_channels
+			or self._channel_salts != self._saved_channel_salts
 			or self._radio_salt != self._saved_radio_salt
 			or self._settings_dirty
 		)
@@ -315,8 +325,13 @@ class ProgramPage(QWidget):
 	def _on_salt_changed(self, value: str):
 		if self._updating_salt:
 			return
-		self._radio_salt = value.strip()
-		self._update_set_configuration_button()
+		current = self.channel_list.currentItem()
+		if current:
+			channel_number = current.data(Qt.ItemDataRole.UserRole)
+			if channel_number is not None:
+				ch = int(channel_number)
+				self._channel_salts[ch] = value.strip()
+				self._update_set_configuration_button()
 
 	def _update_set_configuration_button(self):
 		self.set_configuration_button.setEnabled(True)
@@ -327,6 +342,7 @@ class ProgramPage(QWidget):
 
 	def _discard_pending_changes(self):
 		self._encrypted_channels = set(self._saved_encrypted_channels)
+		self._channel_salts = dict(self._saved_channel_salts)
 		self.set_radio_salt(self._saved_radio_salt)
 		self._settings_dirty = False
 		self._pending_device_name = self._device_name
@@ -514,6 +530,14 @@ class ProgramPage(QWidget):
 						self._set_channel_status(self._format_serial_failure("Radio password", replies), is_error=True)
 						return False
 
+				if self._channel_salts != self._saved_channel_salts:
+					channel_salts_json = json.dumps({str(k): v for k, v in self._channel_salts.items()})
+					encoded_salts = base64.b64encode(channel_salts_json.encode()).decode()
+					confirmed, replies = self._send_serial_command(connection, f"channel_salts_b64:{encoded_salts}", "Channel salts stored.")
+					if not confirmed:
+						self._set_channel_status(self._format_serial_failure("Channel salts", replies), is_error=True)
+						return False
+
 				if self._radio_salt != self._saved_radio_salt:
 					encoded_radio_salt = base64.b64encode(self._radio_salt.encode()).decode()
 					confirmed, replies = self._send_serial_command(connection, f"radio_salt_b64:{encoded_radio_salt}", "Radio salt stored.")
@@ -538,6 +562,7 @@ class ProgramPage(QWidget):
 
 		self._pending_radio_password = ""
 		self._settings_dirty = False
+		self._saved_channel_salts = dict(self._channel_salts)
 		self._saved_radio_salt = self._radio_salt
 		self._device_name = self._pending_device_name or self._device_name
 		self._saved_encrypted_channels = set(self._encrypted_channels)

@@ -35,6 +35,7 @@ class MyApp(QWidget):
 
     def show_start_page(self):
         self.program_page.stop_serial_activity()
+        self.login_page.stop_connection(close_connections=True)
         self.stack.setCurrentWidget(self.start_page)
 
     def on_back_to_start(self):
@@ -55,13 +56,27 @@ class MyApp(QWidget):
             self.program_page.load_preview_data()
         else:
             selected_port = self.login_page._selected_port()
-            latest_packet = self.login_page.latest_packets.get(selected_port, {})
-            self.program_page.set_device_name(latest_packet.get("device", "Walkie-Talkie Device"))
+            latest_packet = self.login_page.latest_packets.get(selected_port) or self.login_page.latest_packet or {}
+            device_name = latest_packet.get("device", "").strip()
+            self.program_page.set_device_name(device_name or "Walkie-Talkie Device")
             self.program_page.set_upload_port(selected_port)
             self.program_page.set_serial_connection(self.login_page.serial_connections.get(selected_port))
             self.program_page.set_device_password(self.login_page.last_device_password)
-            self.program_page.reload_channel_config()
+
+            min_ch = latest_packet.get("min_channel")
+            max_ch = latest_packet.get("max_channel")
+            if min_ch is not None and max_ch is not None:
+                self.program_page.set_channel_range(int(min_ch), int(max_ch))
+            else:
+                self.program_page.reload_channel_config()
+
             self.program_page.set_encrypted_channels(latest_packet.get("encrypted_channels", []))
+            
+            channel_salts = latest_packet.get("channel_salts", {})
+            if not channel_salts and latest_packet.get("radio_salt"):
+                fallback_salt = latest_packet.get("radio_salt", "")
+                channel_salts = {ch: fallback_salt for ch in latest_packet.get("encrypted_channels", [])}
+            self.program_page.set_channel_salts(channel_salts)
             self.program_page.set_radio_salt(latest_packet.get("radio_salt", ""))
             self.login_page.stop_connection(close_connections=False)
 

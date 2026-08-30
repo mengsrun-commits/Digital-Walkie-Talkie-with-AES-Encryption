@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QGraphicsOpacityEffect, QSizePolicy, QToolButton,
     QComboBox, QDialog, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QTimer, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer, QPoint
 from PyQt6.QtGui import QFont
 import time
 import json
@@ -13,28 +13,8 @@ import serial
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes
-from serial_services import find_esp32_ports, wait_for_serial_ports
+from serial_services import find_esp32_ports
 
-
-class SerialConnectionWorker(QThread):
-    connected = pyqtSignal(dict)
-
-    def run(self):
-        serial_connections = wait_for_serial_ports(115200, timeout=1)
-        time.sleep(2)
-
-        print(f"ESP32 connected on: {', '.join(serial_connections.keys())}.")
-        for connection in serial_connections.values():
-            try:
-                time.sleep(2)
-                connection.reset_input_buffer()
-                connection.write(b"ready\n")
-                connection.flush()
-                print(f"Sent READY to {connection.port}")
-            except serial.SerialException as e:
-                print(f"Error on {connection.port}: {e}")
-
-        self.connected.emit(serial_connections)
 
 class DownwardComboBox(QComboBox):
     def showPopup(self):
@@ -44,6 +24,7 @@ class DownwardComboBox(QComboBox):
         popup.resize(self.width(), popup.height())
         if self.count() > 0:
             self.view().setCurrentIndex(self.model().index(0, 0))
+
 
 class LoginApp(QWidget):
     login_success = pyqtSignal()
@@ -68,79 +49,93 @@ class LoginApp(QWidget):
         self._updating_devices = False
         self.latest_packets = {}
         self.latest_packet = None
+        self._ready_sent_at = {}
         self.last_device_password = ""
         self.setMinimumWidth(400)
         self._services_started = False
         self._password_required_redirecting = False
+        self._password_prompt_in_progress = False
+        self._password_session_configured = False
         self.setup_ui()
 
     def start_connection(self):
+        """Starts serial polling and handshake only when entering Login page."""
         self._services_started = True
         self._password_required_redirecting = False
+        self._password_session_configured = False
+        self.latest_packets.clear()
+        self.latest_packet = None
+        self._ready_sent_at.clear()
+        self.password_input.clear()
+        self.status_label.setText("")
 
-        # Ensure UI/Service components are initialized
-        if not hasattr(self, 'serial_read_timer'): self._setup_serial_reader()
-        if not hasattr(self, 'device_poll_timer'): self._setup_device_polling()
-        if not hasattr(self, 'connecting_dots_timer'): self._setup_connecting_animation()
+        if not hasattr(self, 'serial_read_timer'):
+            self._setup_serial_reader()
+        if not hasattr(self, 'device_poll_timer'):
+            self._setup_device_polling()
+        if not hasattr(self, 'connecting_dots_timer'):
+            self._setup_connecting_animation()
 
-        # Always start/restart timers when entering the page
-        if not self.serial_read_timer.isActive(): self.serial_read_timer.start()
-        if not self.device_poll_timer.isActive(): self.device_poll_timer.start()
-        
+        if not self.serial_read_timer.isActive():
+            self.serial_read_timer.start()
+        if not self.device_poll_timer.isActive():
+            self.device_poll_timer.start()
+
         if hasattr(self, 'waiting_pulse') and self.waiting_pulse.state() != QPropertyAnimation.State.Running:
             self.waiting_pulse.start()
 
-        # Check if we already have active connections
-        active_ports = [p for p, c in self.serial_connections.items() if c.is_open]
-        if active_ports:
-            for port in active_ports:
-                self.latest_packets.pop(port, None)
-            self.latest_packet = None
-
-            # Re-trigger handshake for each existing port to ensure fresh data
-            for port in active_ports:
-                print(f"Re-triggering READY handshake for {port}...")
-                self._send_ready(port)
-            
-            # Update UI immediately to avoid "stuck" feeling
-            self._refresh_device_list()
-            return
-
-        # No active ports, start search
-        self.start_serial_connection_worker()
+        # Run immediate poll
+        self._refresh_device_list()
 
     def stop_connection(self, close_connections=True):
+        """Stops all serial communication and timers."""
         self._services_started = False
-        
-        if hasattr(self, 'serial_worker') and self.serial_worker.isRunning():
-            self.serial_worker.terminate()
-            self.serial_worker.wait()
-            
+
         if hasattr(self, 'serial_read_timer'):
             self.serial_read_timer.stop()
-            
+
         if hasattr(self, 'device_poll_timer'):
             self.device_poll_timer.stop()
-            
+
         if hasattr(self, 'connecting_dots_timer'):
             self.connecting_dots_timer.stop()
-            
+
         if hasattr(self, 'waiting_pulse'):
             self.waiting_pulse.stop()
 
         if close_connections:
-            for connection in self.serial_connections.values():
+            for connection in list(self.serial_connections.values()):
                 try:
-                    if connection.is_open:
+                    if connection and connection.is_open:
                         connection.close()
                 except Exception:
                     pass
+            self.serial_connections.clear()
+            self.latest_packets.clear()
+            self.latest_packet = None
+            self._ready_sent_at.clear()
+            self._device_ports.clear()
 
     def _setup_serial_reader(self):
         self.serial_read_timer = QTimer(self)
-        self.serial_read_timer.setInterval(100)  # fast polling
+        self.serial_read_timer.setInterval(50)  # fast non-blocking polling
         self.serial_read_timer.timeout.connect(self._read_serial_data)
-        # self.serial_read_timer.start()  # Moved to start_connection
+
+    def _setup_device_polling(self):
+        self.device_poll_timer = QTimer(self)
+        self.device_poll_timer.setInterval(800)
+        self.device_poll_timer.timeout.connect(self._refresh_device_list)
+
+    def _setup_connecting_animation(self):
+        self._connecting_dots = 0
+        self.connecting_dots_timer = QTimer(self)
+        self.connecting_dots_timer.setInterval(400)
+        self.connecting_dots_timer.timeout.connect(self._animate_connecting_label)
+
+    def _animate_connecting_label(self):
+        self._connecting_dots = (self._connecting_dots + 1) % 4
+        dots = "." * self._connecting_dots
+        self.connecting_label.setText(f"Establishing connection{dots}")
 
     def _selected_port(self) -> str:
         data = self.device_combo.currentData()
@@ -158,63 +153,120 @@ class LoginApp(QWidget):
         return port
 
     def _device_password_enabled(self) -> bool:
+        if self._password_session_configured:
+            return True
         if isinstance(self.latest_packet, dict):
             return bool(self.latest_packet.get("password_enabled", True))
         return True
-    
-    def _send_ready(self, port):
-        connection = self.serial_connections.get(port)
-        if connection and connection.is_open:
-            try:
-                connection.write(b"ready\n")
-                print(f"Sent READY to {port}")
-            except Exception as e:
-                print(f"Failed to send READY to {port}: {e}")
-                # Connection is likely dead (unplugged/replugged)
+
+    def _refresh_device_list(self):
+        if not self._services_started or self._password_required_redirecting:
+            return
+
+        ports = find_esp32_ports()
+        had_devices = bool(self._device_ports)
+
+        # Cleanup any disconnected ports
+        for port in list(self.serial_connections.keys()):
+            if port not in ports:
+                print(f"Device {port} was unplugged. Cleaning up...")
                 try:
-                    connection.close()
-                except:
+                    self.serial_connections[port].close()
+                except Exception:
                     pass
-                if port in self.serial_connections:
-                    del self.serial_connections[port]
-                if port in self.latest_packets:
-                    del self.latest_packets[port]
-                
-                # Re-trigger connection search to find the new handle
-                QTimer.singleShot(100, self.start_connection)
+                self.serial_connections.pop(port, None)
+                self.latest_packets.pop(port, None)
+                self._ready_sent_at.pop(port, None)
+                self.device_disconnected.emit(port)
+
+        if ports != self._device_ports:
+            self._device_ports = list(ports)
+            selected = self._selected_port()
+            self._rebuild_device_combo(selected, self._device_ports)
+
+        if ports:
+            # Open serial port for any newly detected device
+            for port in ports:
+                conn = self.serial_connections.get(port)
+                if not conn or not conn.is_open:
+                    try:
+                        conn = serial.Serial(port, 115200, timeout=0.1)
+                        self.serial_connections[port] = conn
+                        self._ready_sent_at.pop(port, None)
+                        print(f"Opened ESP32 serial port {port}.")
+                    except serial.SerialException as exc:
+                        print(f"Could not open {port}: {exc}")
+
+            # Send handshake or heartbeat
+            now = time.monotonic()
+            for port, conn in list(self.serial_connections.items()):
+                if not conn or not conn.is_open:
+                    continue
+                if port not in self.latest_packets:
+                    # Not yet handshaked: send READY periodically (every 1s)
+                    if now - self._ready_sent_at.get(port, 0) >= 1.0:
+                        try:
+                            conn.write(b"ready\n")
+                            conn.flush()
+                            self._ready_sent_at[port] = now
+                            print(f"Sent READY to {port}")
+                        except Exception as exc:
+                            print(f"Failed to send READY to {port}: {exc}")
+                else:
+                    # Handshake already complete: send periodic heartbeat ping
+                    try:
+                        conn.write(b"ping\n")
+                        conn.flush()
+                    except Exception:
+                        pass
+
+            self.waiting_label.hide()
+            selected = self._selected_port()
+            if selected and self.latest_packets.get(selected):
+                self._show_login_ready()
+            else:
+                self._show_connecting_screen()
+        else:
+            if had_devices:
+                self._show_disconnect_message()
+            else:
+                self._show_waiting_screen()
 
     def _read_serial_data(self):
+        if not self._services_started:
+            return
+
         selected_port = self._selected_port()
 
-        for port, connection in self.serial_connections.items():
+        for port, connection in list(self.serial_connections.items()):
+            if not connection or not connection.is_open:
+                continue
             try:
                 while connection.in_waiting:
                     line = connection.readline().decode(errors="ignore").strip()
                     if not line:
                         continue
 
-                    # DEBUG: Print raw lines to help diagnose handshake issues
                     print(f"[{port}] RX: {line}")
 
                     try:
                         msg = json.loads(line)
-                        self.latest_packets[port] = msg
-                        if port == selected_port:
-                            self.latest_packet = msg
-                            self._show_login_ready()
+                        if isinstance(msg, dict) and "ciphertext" in msg:
+                            self.latest_packets[port] = msg
+                            if port == selected_port or not self.latest_packet:
+                                self.latest_packet = msg
+                                self._show_login_ready()
 
-                        if port in self._device_ports:
-                            self._rebuild_device_combo(selected_port, self._device_ports)
+                            if port in self._device_ports:
+                                self._rebuild_device_combo(selected_port, self._device_ports)
 
-                        print("\nEncrypted packet received ✔")
-                        print("Ciphertext:", base64.b64decode(msg["ciphertext"]))
-
+                            print(f"\nEncrypted handshake packet received from {port} ✔")
+                            print("Ciphertext:", base64.b64decode(msg["ciphertext"]))
                     except json.JSONDecodeError:
                         continue
+            except (serial.SerialException, OSError) as exc:
+                print(f"Serial read error on {port}: {exc}")
 
-            except serial.SerialException:
-                continue
-        
     def setup_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(18)
@@ -236,19 +288,18 @@ class LoginApp(QWidget):
         self.waiting_label.setGraphicsEffect(self.waiting_opacity)
         self.waiting_pulse = QPropertyAnimation(self.waiting_opacity, b"opacity", self)
         self.waiting_pulse.setDuration(self.pulsing_duration_ms)
-        self.waiting_pulse.setKeyValueAt(0.0, 0.35) # (0 -> 1, opacity)
+        self.waiting_pulse.setKeyValueAt(0.0, 0.35)
         self.waiting_pulse.setKeyValueAt(0.5, 1.0)
         self.waiting_pulse.setKeyValueAt(1.0, 0.35)
         self.waiting_pulse.setLoopCount(-1)
-        self.waiting_pulse.start()
         main_layout.addWidget(self.waiting_label)
+
         self.disconnect_label = QLabel(self.DISCONNECT_MESSAGE)
         self.disconnect_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.disconnect_label.setWordWrap(True)
         self.disconnect_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.disconnect_label.setStyleSheet("color: red;")
-
-        self.disconnect_label.hide()  # hidden by default
+        self.disconnect_label.hide()
         main_layout.addWidget(self.disconnect_label)
 
         self.connecting_label = QLabel("Establishing connection")
@@ -260,10 +311,10 @@ class LoginApp(QWidget):
         main_layout.addWidget(self.connecting_label)
 
         self._setup_connecting_animation()
-
         self._build_login_form()
         self._update_form_width()
         self._setup_device_polling()
+        self._setup_serial_reader()
 
         # Place the compact form in the center vertically
         main_layout.addStretch()
@@ -273,7 +324,6 @@ class LoginApp(QWidget):
         self.setLayout(main_layout)
 
     def _build_login_form(self):
-        # Form container: keep widgets grouped, compact and centered
         self.form_widget = QWidget()
         self.form_layout = QVBoxLayout()
         self.form_layout.setSpacing(14)
@@ -389,72 +439,6 @@ class LoginApp(QWidget):
             self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.password_toggle.setText("Show")
 
-    def _setup_connecting_animation(self):
-        self._connecting_dots = 0
-        self.connecting_dots_timer = QTimer(self)
-        self.connecting_dots_timer.setInterval(400)
-        self.connecting_dots_timer.timeout.connect(self._animate_connecting_label)
-
-    def _animate_connecting_label(self):
-        self._connecting_dots = (self._connecting_dots + 1) % 4
-        dots = "." * self._connecting_dots
-        self.connecting_label.setText(f"Establishing connection{dots}")
-
-    def _setup_device_polling(self):
-        self.device_poll_timer = QTimer(self)
-        self.device_poll_timer.setInterval(1000)
-        self.device_poll_timer.timeout.connect(self._refresh_device_list)
-        # self.device_poll_timer.start()  # Moved to start_connection
-        self._refresh_device_list()
-
-    def _refresh_device_list(self):
-        if self._password_required_redirecting:
-            return
-
-        ports = find_esp32_ports()
-        had_devices = bool(self._device_ports)  # <-- previous state
-
-        # PROACTIVE CLEANUP: Remove any connections that are no longer physically present
-        active_tracked_ports = list(self.serial_connections.keys())
-        for port in active_tracked_ports:
-            if port not in ports:
-                print(f"Device {port} was unplugged. Cleaning up...")
-                try:
-                    self.serial_connections[port].close()
-                except:
-                    pass
-                del self.serial_connections[port]
-                if port in self.latest_packets:
-                    del self.latest_packets[port]
-                self.device_disconnected.emit(port)
-            else:
-                # Send heartbeat to keep connection alive on ESP32
-                try:
-                    conn = self.serial_connections[port]
-                    if conn.is_open:
-                        conn.write(b"ping\n")
-                except Exception as e:
-                    pass
-
-        if ports != self._device_ports:
-            self._device_ports = list(ports)
-            selected = self._selected_port()
-            self._rebuild_device_combo(selected, self._device_ports)
-
-        if ports:
-            self.waiting_label.hide()
-            selected = self._selected_port()
-            if selected and self.latest_packets.get(selected):
-                self._show_login_ready()
-            else:
-                self._show_connecting_screen()
-        
-        else:
-            if had_devices:  # <-- use previous state
-                self._show_disconnect_message()
-            else:
-                self._show_waiting_screen()
-
     def _rebuild_device_combo(self, selected: str, ports: list[str]):
         self._updating_devices = True
         self.device_combo.blockSignals(True)
@@ -516,39 +500,67 @@ class LoginApp(QWidget):
         if getattr(self, '_is_prompting_password', False):
             return
 
+        if self._password_prompt_in_progress:
+            return
+
         self.waiting_label.hide()
         self.disconnect_label.hide()
         self.connecting_label.hide()
         self.connecting_dots_timer.stop()
-        
+
         password_configured = self._device_password_enabled()
         if not password_configured:
             self._is_prompting_password = True
+            self._password_prompt_in_progress = True
             try:
                 new_password = self._prompt_create_password()
             finally:
                 self._is_prompting_password = False
+                self._password_prompt_in_progress = False
 
             if not new_password:
                 self._show_password_required_dialog()
                 return
-            
-            # Set the password in the input field and auto-login
-            self.password_input.setText(new_password)
-            self.on_login()
+
+            self._password_session_configured = True
+            if isinstance(self.latest_packet, dict):
+                self.latest_packet["password_enabled"] = True
+            for pkt in self.latest_packets.values():
+                if isinstance(pkt, dict):
+                    pkt["password_enabled"] = True
+
+            selected_port = self._selected_port()
+            conn = self.serial_connections.get(selected_port)
+            if conn and conn.is_open:
+                try:
+                    encoded = base64.b64encode(new_password.encode()).decode()
+                    conn.write(f"device_password_b64:{encoded}\n".encode())
+                    conn.flush()
+                    time.sleep(0.1)
+                    conn.write(b"ready\n")
+                    conn.flush()
+                    print(f"Saved device password and requested fresh handshake on {selected_port}")
+                except Exception as exc:
+                    print(f"Failed to save new device password: {exc}")
+
+            self.latest_packet = None
+            self.password_input.clear()
+            self.status_label.setStyleSheet("color: blue; font-weight: bold;")
+            self.status_label.setText("Password saved. Please log in again.")
+            self._set_login_visible(True)
             return
-            
+
         self._set_login_visible(True)
 
     def _show_password_required_dialog(self):
         self._password_required_redirecting = True
         self._set_login_visible(False)
+        self.stop_connection(close_connections=True)
         QMessageBox.information(
             self,
             "Password Required",
             "A device password is required. You cannot continue to the program page without setting a password."
         )
-        self.stop_connection(close_connections=True)
         self._password_required_redirecting = False
         self.back_to_start.emit()
 
@@ -562,31 +574,6 @@ class LoginApp(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_form_width()
-
-    def on_serial_connected(self, serial_connections):
-        self.serial_connections = serial_connections
-        self.waiting_label.hide()
-        selected = self._selected_port()
-        if not selected and self._device_ports:
-            selected = self._device_ports[0]
-            self._rebuild_device_combo(selected, self._device_ports)
-
-        if selected:
-            self.latest_packet = self.latest_packets.get(selected)        
-            if self.latest_packet:
-                self._show_login_ready()
-            else:
-                self._show_connecting_screen()
-        
-    def start_serial_connection_worker(self):
-        if hasattr(self, 'serial_worker') and self.serial_worker.isRunning():
-            print("Serial connection worker is already running.")
-            return
-
-        self.serial_worker = SerialConnectionWorker()
-        self.serial_worker.connected.connect(self.on_serial_connected)
-        self.serial_worker.start()
-
 
     def on_login(self):
         password = self.password_input.text().strip()
@@ -635,6 +622,14 @@ class LoginApp(QWidget):
             print("\n✅ Correct password!")
             print("Decrypted message:", plaintext.decode())
 
+            if pending_device_password or password:
+                self._password_session_configured = True
+                if isinstance(self.latest_packet, dict):
+                    self.latest_packet["password_enabled"] = True
+                for pkt in self.latest_packets.values():
+                    if isinstance(pkt, dict):
+                        pkt["password_enabled"] = True
+
             self.last_device_password = pending_device_password or password
 
             # Notify ESP32 of successful login
@@ -648,9 +643,10 @@ class LoginApp(QWidget):
                         conn.flush()
                         time.sleep(0.1)
                     conn.write(b"login_ok\n")
+                    conn.flush()
                     print(f"Sent LOGIN_OK to {selected_port}")
-                except:
-                    pass
+                except Exception as exc:
+                    print(f"Failed to send LOGIN_OK: {exc}")
 
             self.status_label.setStyleSheet("color: green; font-weight: bold;")
             self.status_label.setText("✅ Welcome! Logging in...")
@@ -710,7 +706,7 @@ class LoginApp(QWidget):
             result = new_password
             break
 
-        self._set_login_visible(bool(result))
+        self._set_login_visible(True)
         return result
 
     def on_clear(self):
@@ -720,36 +716,3 @@ class LoginApp(QWidget):
     def clear_credentials(self):
         self.password_input.clear()
         self.status_label.setText("")
-
-    def _get_selected_connection(self):
-        port = self._selected_port()
-        if not port:
-            return None, "❌ No device selected."
-
-        existing = self.serial_connections.get(port)
-        if existing and existing.is_open:
-            return existing, None
-
-        try:
-            connection = serial.Serial(port, 115200, timeout=1)
-        except serial.SerialException as exc:
-            return None, f"❌ Failed to open {port}: {exc}"
-
-        self.serial_connections[port] = connection
-        return connection, None
-    def _send_ready(self, port: str):
-        if not port:
-            return
-
-        connection = self.serial_connections.get(port)
-        if not connection or not connection.is_open:
-            return
-
-        try:
-            connection.reset_input_buffer() 
-            connection.write(b"ready\n")
-            connection.flush()
-            print(f"Sent READY to {port}")
-        except serial.SerialException as e:
-            print(f"Failed to send READY to {port}: {e}")
-    

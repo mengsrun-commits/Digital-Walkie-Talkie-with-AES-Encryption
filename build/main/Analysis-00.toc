@@ -206,12 +206,12 @@
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyInstaller\\fake-modules\\_pyi_rth_utils\\__init__.py',
    'PYMODULE'),
+  ('_py_abc', 'C:\\Python313\\Lib\\_py_abc.py', 'PYMODULE'),
   ('subprocess', 'C:\\Python313\\Lib\\subprocess.py', 'PYMODULE'),
   ('signal', 'C:\\Python313\\Lib\\signal.py', 'PYMODULE'),
   ('tracemalloc', 'C:\\Python313\\Lib\\tracemalloc.py', 'PYMODULE'),
-  ('_colorize', 'C:\\Python313\\Lib\\_colorize.py', 'PYMODULE'),
   ('stringprep', 'C:\\Python313\\Lib\\stringprep.py', 'PYMODULE'),
-  ('_py_abc', 'C:\\Python313\\Lib\\_py_abc.py', 'PYMODULE'),
+  ('_colorize', 'C:\\Python313\\Lib\\_colorize.py', 'PYMODULE'),
   ('app',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\Encryption Program\\app.py',
@@ -437,57 +437,33 @@
    'Implementation\\myvenv\\Lib\\site-packages\\cryptography\\hazmat\\primitives\\kdf\\__init__.py',
    'PYMODULE')],
  [('python313.dll', 'C:\\Python313\\python313.dll', 'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
+  ('PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\imageformats\\qsvg.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qsvg.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qoffscreen.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qwindows.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qtga.dll',
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtga.dll',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwebp.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+  ('PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\generic\\qtuiotouchplugin.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\imageformats\\qgif.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qgif.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
-   'BINARY'),
-  ('PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtiff.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\plugins\\iconengines\\qsvgicon.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
@@ -496,6 +472,30 @@
   ('PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qpdf.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qtga.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qtga.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\platforms\\qminimal.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qjpeg.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qico.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qwbmp.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\plugins\\imageformats\\qicns.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\bin\\opengl32sw.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
@@ -550,14 +550,14 @@
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Svg.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\Qt6Network.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Network.dll',
-   'BINARY'),
   ('VCRUNTIME140_1.dll', 'C:\\Python313\\VCRUNTIME140_1.dll', 'BINARY'),
   ('PyQt6\\Qt6\\bin\\MSVCP140.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\Qt6Network.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\Qt6Network.dll',
    'BINARY'),
   ('PyQt6\\Qt6\\bin\\Qt6Pdf.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
@@ -578,299 +578,295 @@
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140_1.dll',
    'BINARY'),
-  ('PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
-   'BINARY'),
   ('PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\MSVCP140_1.dll',
+   'BINARY'),
+  ('PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\bin\\VCRUNTIME140.dll',
    'BINARY')],
  [],
  [],
- [('cryptography-46.0.6.dist-info\\REQUESTED',
+ [('cryptography-46.0.6.dist-info\\WHEEL',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\REQUESTED',
-   'DATA'),
-  ('cryptography-46.0.6.dist-info\\licenses\\LICENSE',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\licenses\\LICENSE',
+   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\WHEEL',
    'DATA'),
   ('cryptography-46.0.6.dist-info\\METADATA',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\METADATA',
    'DATA'),
+  ('cryptography-46.0.6.dist-info\\licenses\\LICENSE.APACHE',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\licenses\\LICENSE.APACHE',
+   'DATA'),
   ('cryptography-46.0.6.dist-info\\INSTALLER',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\INSTALLER',
+   'DATA'),
+  ('cryptography-46.0.6.dist-info\\REQUESTED',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\REQUESTED',
    'DATA'),
   ('cryptography-46.0.6.dist-info\\RECORD',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\RECORD',
    'DATA'),
-  ('cryptography-46.0.6.dist-info\\WHEEL',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\WHEEL',
-   'DATA'),
-  ('cryptography-46.0.6.dist-info\\licenses\\LICENSE.APACHE',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\licenses\\LICENSE.APACHE',
-   'DATA'),
   ('cryptography-46.0.6.dist-info\\licenses\\LICENSE.BSD',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\licenses\\LICENSE.BSD',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_gd.qm',
+  ('cryptography-46.0.6.dist-info\\licenses\\LICENSE',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gd.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\cryptography-46.0.6.dist-info\\licenses\\LICENSE',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_de.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_it.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_de.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ca.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ca.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ru.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ru.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_da.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_hr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_it.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ja.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ja.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_uk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_uk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ko.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ko.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ka.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ka.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_nl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_tr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_tr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_fr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_fr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_de.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_de.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_bg.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_bg.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_bg.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_bg.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_sv.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sv.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_hu.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hu.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_he.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_he.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_cs.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_cs.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_es.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_he.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_he.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_uk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_uk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_tr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_tr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_it.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_en.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_en.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ru.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ru.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ca.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ca.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_en.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_en.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_nl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_sk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ko.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ko.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_cs.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_cs.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_pl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_pl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_cs.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_cs.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_hr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_tr.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_tr.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_da.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_bg.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_bg.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ja.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ja.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ru.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ru.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_sv.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sv.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_gl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_gl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_nn.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nn.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_nn.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nn.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_lg.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_it.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_sl.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_gl.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_da.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gl.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_da.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ar.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ar.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_CN.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_zh_TW.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_it.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_it.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_pl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pl.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pt_BR.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_sv.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sv.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_fi.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_da.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fi.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_da.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_gl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_gl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_gd.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gd.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_es.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_es.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_uk.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_uk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_hu.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hu.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_lg.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_lg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_hr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_tr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_tr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_pl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_BR.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fa.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_lt.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lt.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_tr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_tr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_cs.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_cs.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ca.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ca.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_fa.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fa.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_ja.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ja.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ca.qm',
+  ('PyQt6\\Qt6\\translations\\qtbase_nl.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ca.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_hr.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_de.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hr.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_de.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_gl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_gl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ko.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ko.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_fi.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fi.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_uk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ko.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ko.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_nn.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nn.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_sv.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_CN.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_nl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_nl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ja.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ja.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_sv.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_fr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ca.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ca.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_sk.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_en.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_en.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_nn.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_nn.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_tr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_tr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ru.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ka.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ka.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_fi.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fi.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_hu.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hu.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_cs.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_cs.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_de.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_de.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_en.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_en.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_en.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_en.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_da.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_da.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_fr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_fr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_he.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_he.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ka.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ka.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qtbase_lv.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
@@ -880,156 +876,162 @@
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sl.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_pl.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_pl.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_zh_TW.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_ka.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ka.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_nn.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nn.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ko.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ko.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_es.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_sk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_sk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_uk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_uk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_ka.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ka.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_sv.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sv.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_en.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_en.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_da.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_da.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lg.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lg.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_it.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_it.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lt.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lt.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_es.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_es.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_help_hu.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hu.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_sk.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sk.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fa.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fa.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fi.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fi.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_gd.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_gd.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_ar.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ar.qm',
-   'DATA'),
   ('PyQt6\\Qt6\\translations\\qt_help_ar.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ar.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
+  ('PyQt6\\Qt6\\translations\\qt_he.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_lv.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lv.qm',
-   'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_fa.qm',
-   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fa.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_he.qm',
    'DATA'),
   ('PyQt6\\Qt6\\translations\\qtbase_de.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_de.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+  ('PyQt6\\Qt6\\translations\\qt_ar.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_fr.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ar.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_fr.qm',
+  ('PyQt6\\Qt6\\translations\\qt_uk.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_fr.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_uk.qm',
    'DATA'),
-  ('PyQt6\\Qt6\\translations\\qt_hu.qm',
+  ('PyQt6\\Qt6\\translations\\qt_help_bg.qm',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
-   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_hu.qm',
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_bg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_pt_PT.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_pl.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pl.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_nn.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_nn.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ru.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ka.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ka.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_es.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_es.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_bg.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_bg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_pt_BR.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ar.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_bg.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_bg.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_gd.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_gd.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_ru.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_ru.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_hr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_hr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_CN.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ko.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ko.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_hu.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hu.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_cs.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_cs.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_sk.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_sk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_ja.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_ja.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qtbase_sk.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qtbase_sk.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_lv.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_lv.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_zh_TW.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_it.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_it.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_hr.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_hr.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_es.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_es.qm',
+   'DATA'),
+  ('PyQt6\\Qt6\\translations\\qt_help_ca.qm',
+   'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
+   'Implementation\\myvenv\\Lib\\site-packages\\PyQt6\\Qt6\\translations\\qt_help_ca.qm',
    'DATA'),
   ('base_library.zip',
    'D:\\UNIVERSITY WORK\\TEED Year 3\\Semester 2\\Project Practicum\\Code '
    'Implementation\\build\\main\\base_library.zip',
    'DATA')],
- [('_collections_abc', 'C:\\Python313\\Lib\\_collections_abc.py', 'PYMODULE'),
+ [('linecache', 'C:\\Python313\\Lib\\linecache.py', 'PYMODULE'),
+  ('io', 'C:\\Python313\\Lib\\io.py', 'PYMODULE'),
+  ('abc', 'C:\\Python313\\Lib\\abc.py', 'PYMODULE'),
+  ('keyword', 'C:\\Python313\\Lib\\keyword.py', 'PYMODULE'),
+  ('copyreg', 'C:\\Python313\\Lib\\copyreg.py', 'PYMODULE'),
+  ('_weakrefset', 'C:\\Python313\\Lib\\_weakrefset.py', 'PYMODULE'),
+  ('os', 'C:\\Python313\\Lib\\os.py', 'PYMODULE'),
+  ('sre_parse', 'C:\\Python313\\Lib\\sre_parse.py', 'PYMODULE'),
+  ('functools', 'C:\\Python313\\Lib\\functools.py', 'PYMODULE'),
+  ('types', 'C:\\Python313\\Lib\\types.py', 'PYMODULE'),
+  ('enum', 'C:\\Python313\\Lib\\enum.py', 'PYMODULE'),
   ('re._parser', 'C:\\Python313\\Lib\\re\\_parser.py', 'PYMODULE'),
   ('re._constants', 'C:\\Python313\\Lib\\re\\_constants.py', 'PYMODULE'),
   ('re._compiler', 'C:\\Python313\\Lib\\re\\_compiler.py', 'PYMODULE'),
   ('re._casefix', 'C:\\Python313\\Lib\\re\\_casefix.py', 'PYMODULE'),
   ('re', 'C:\\Python313\\Lib\\re\\__init__.py', 'PYMODULE'),
-  ('os', 'C:\\Python313\\Lib\\os.py', 'PYMODULE'),
-  ('collections', 'C:\\Python313\\Lib\\collections\\__init__.py', 'PYMODULE'),
-  ('types', 'C:\\Python313\\Lib\\types.py', 'PYMODULE'),
-  ('heapq', 'C:\\Python313\\Lib\\heapq.py', 'PYMODULE'),
-  ('copyreg', 'C:\\Python313\\Lib\\copyreg.py', 'PYMODULE'),
-  ('warnings', 'C:\\Python313\\Lib\\warnings.py', 'PYMODULE'),
-  ('enum', 'C:\\Python313\\Lib\\enum.py', 'PYMODULE'),
-  ('traceback', 'C:\\Python313\\Lib\\traceback.py', 'PYMODULE'),
+  ('weakref', 'C:\\Python313\\Lib\\weakref.py', 'PYMODULE'),
+  ('operator', 'C:\\Python313\\Lib\\operator.py', 'PYMODULE'),
   ('ntpath', 'C:\\Python313\\Lib\\ntpath.py', 'PYMODULE'),
-  ('functools', 'C:\\Python313\\Lib\\functools.py', 'PYMODULE'),
-  ('sre_parse', 'C:\\Python313\\Lib\\sre_parse.py', 'PYMODULE'),
-  ('linecache', 'C:\\Python313\\Lib\\linecache.py', 'PYMODULE'),
-  ('_weakrefset', 'C:\\Python313\\Lib\\_weakrefset.py', 'PYMODULE'),
-  ('keyword', 'C:\\Python313\\Lib\\keyword.py', 'PYMODULE'),
-  ('reprlib', 'C:\\Python313\\Lib\\reprlib.py', 'PYMODULE'),
+  ('sre_constants', 'C:\\Python313\\Lib\\sre_constants.py', 'PYMODULE'),
+  ('genericpath', 'C:\\Python313\\Lib\\genericpath.py', 'PYMODULE'),
+  ('_collections_abc', 'C:\\Python313\\Lib\\_collections_abc.py', 'PYMODULE'),
   ('sre_compile', 'C:\\Python313\\Lib\\sre_compile.py', 'PYMODULE'),
+  ('warnings', 'C:\\Python313\\Lib\\warnings.py', 'PYMODULE'),
   ('encodings.zlib_codec',
    'C:\\Python313\\Lib\\encodings\\zlib_codec.py',
    'PYMODULE'),
@@ -1272,13 +1274,11 @@
    'C:\\Python313\\Lib\\encodings\\aliases.py',
    'PYMODULE'),
   ('encodings', 'C:\\Python313\\Lib\\encodings\\__init__.py', 'PYMODULE'),
-  ('weakref', 'C:\\Python313\\Lib\\weakref.py', 'PYMODULE'),
-  ('io', 'C:\\Python313\\Lib\\io.py', 'PYMODULE'),
-  ('genericpath', 'C:\\Python313\\Lib\\genericpath.py', 'PYMODULE'),
-  ('locale', 'C:\\Python313\\Lib\\locale.py', 'PYMODULE'),
   ('codecs', 'C:\\Python313\\Lib\\codecs.py', 'PYMODULE'),
-  ('posixpath', 'C:\\Python313\\Lib\\posixpath.py', 'PYMODULE'),
-  ('sre_constants', 'C:\\Python313\\Lib\\sre_constants.py', 'PYMODULE'),
-  ('abc', 'C:\\Python313\\Lib\\abc.py', 'PYMODULE'),
-  ('operator', 'C:\\Python313\\Lib\\operator.py', 'PYMODULE'),
-  ('stat', 'C:\\Python313\\Lib\\stat.py', 'PYMODULE')])
+  ('heapq', 'C:\\Python313\\Lib\\heapq.py', 'PYMODULE'),
+  ('reprlib', 'C:\\Python313\\Lib\\reprlib.py', 'PYMODULE'),
+  ('traceback', 'C:\\Python313\\Lib\\traceback.py', 'PYMODULE'),
+  ('locale', 'C:\\Python313\\Lib\\locale.py', 'PYMODULE'),
+  ('stat', 'C:\\Python313\\Lib\\stat.py', 'PYMODULE'),
+  ('collections', 'C:\\Python313\\Lib\\collections\\__init__.py', 'PYMODULE'),
+  ('posixpath', 'C:\\Python313\\Lib\\posixpath.py', 'PYMODULE')])
