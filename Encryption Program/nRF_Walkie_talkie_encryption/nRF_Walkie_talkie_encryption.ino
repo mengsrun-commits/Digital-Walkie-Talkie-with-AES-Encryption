@@ -121,6 +121,7 @@ const unsigned long RAPID_CHANNEL_SWITCH_TIME = 100;
 // Radio & Buffers
 uint8_t currentChannel = 1;
 volatile bool channelUpdatePending = false;
+volatile bool radioKeyUpdatePending = false;
 const uint8_t MAX_CHANNEL_VALUE = 125;
 const uint8_t MIN_CHANNEL_VALUE = 1;
 volatile bool currentChannelEncrypted = false;
@@ -277,7 +278,7 @@ void changeChannel(int8_t direction)
     }
 
     refreshCurrentChannelEncryption();
-    initRadioEncryption();
+    radioKeyUpdatePending = true;
     sessionNonceValid = false;
     lastEncryptedSessionTime = 0;
     channelUpdatePending = true;
@@ -392,7 +393,7 @@ const int32_t LIMIT_POST = 28000;
 
 // Raise this value if you still get feedback; lower it if soft speech is cut off.
 const int32_t NOISE_GATE_THRESHOLD = 350; // range: 0 (disabled) – ~32767 (full-scale); practical: 50–500
-const int32_t FIXED_MIC_GAIN = 128;       // 0.5x gain (128 = 1.0x)
+const int32_t FIXED_MIC_GAIN = 512;       // 0.5x gain (256 = 1.0x)
 
 String b64encode(const unsigned char *input, size_t len)
 {
@@ -461,14 +462,14 @@ void setChannelSalt(uint8_t ch, const String &salt)
 // =================================================================
 // Derive radioKey deterministically from the stored radio password and channel salt.
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
-void initRadioEncryption()
+void initRadioEncryptionForChannel(uint8_t channel)
 {
 #if RADIO_DEBUG
     Serial.println("[Radio] Deriving channel encryption key from passwords...");
 #endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    String chSalt = getChannelSalt(currentChannel);
+    String chSalt = getChannelSalt(channel);
     if (chSalt.length() == 0 && radioSaltValue.length() > 0)
     {
         chSalt = radioSaltValue;
@@ -486,7 +487,7 @@ void initRadioEncryption()
     else
     {
         char radioSaltInput[64];
-        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, currentChannel);
+        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, channel);
         mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                    (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
                    autoRadioKeySalt);
@@ -502,6 +503,11 @@ void initRadioEncryption()
 #if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
 #endif
+}
+
+void initRadioEncryption()
+{
+    initRadioEncryptionForChannel(currentChannel);
 }
 
 // Compute a 4-byte authentication tag for the session nonce using radioKey HMAC-SHA256
@@ -830,9 +836,14 @@ void audioCaptureTask(void *param)
             uint8_t plaintext[ENC_PLAINTEXT_SIZE];
             if (peak < NOISE_GATE_THRESHOLD)
             {
-                memset(plaintext, 0, ENC_PLAINTEXT_SIZE);
                 txAdpcmState.predicted = 0;
                 txAdpcmState.index = 0;
+                memset(pcmBuffer, 0, ENC_SAMPLES_PER_FRAME * sizeof(int16_t));
+                plaintext[0] = 0;
+                plaintext[1] = 0;
+                plaintext[2] = 0;
+                adpcmEncode(pcmBuffer, &plaintext[ENC_HEADER_SIZE],
+                            ENC_SAMPLES_PER_FRAME, &txAdpcmState);
             }
             else
             {
@@ -866,6 +877,13 @@ void audioCaptureTask(void *param)
                 memset(txBuffer[fillBuffer], 0, PACKET_SIZE);
                 txAdpcmState.predicted = 0;
                 txAdpcmState.index = 0;
+                memset(pcmBuffer, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
+                txBuffer[fillBuffer][0] = UNENC_PACKET_TYPE;
+                txBuffer[fillBuffer][1] = 0;
+                txBuffer[fillBuffer][2] = 0;
+                txBuffer[fillBuffer][3] = 0;
+                adpcmEncode(pcmBuffer, &txBuffer[fillBuffer][UNENC_HEADER_SIZE],
+                            SAMPLES_PER_FRAME, &txAdpcmState);
             }
             else
             {
@@ -1006,6 +1024,18 @@ void radioTask(void *param)
                 radio.startListening();
             }
             channelUpdatePending = false;
+            radioKeyUpdatePending = true;
+        }
+
+        if (radioKeyUpdatePending)
+        {
+            uint8_t keyChannel = currentChannel;
+            initRadioEncryptionForChannel(keyChannel);
+            sessionNonceValid = false;
+            if (currentChannel == keyChannel)
+            {
+                radioKeyUpdatePending = false;
+            }
         }
 
         if (isTransmitting && !walkieFeaturesPaused())
@@ -2465,16 +2495,27 @@ void setup()
 
     // --- SPI Radio Setup ---
     spiNRF.begin(NRF_SCK, NRF_MISO, NRF_MOSI, CSN_PIN);
-    radio.begin(&spiNRF);
-    radio.setPALevel(RF24_PA_MAX);
-    radio.setDataRate(RF24_250KBPS);
-    radio.setChannel(currentChannel);
-    radio.setCRCLength(RF24_CRC_8);
-    radio.disableDynamicPayloads();
-    radio.setAutoAck(false); //Best effort delivery
-    radio.openWritingPipe(SHARED_ADDRESS);
-    radio.openReadingPipe(1, SHARED_ADDRESS);
-    radio.startListening();
+    Serial.println("Initializing nRF24L01...");
+    if (!radio.begin(&spiNRF))
+    {
+        Serial.println("ERROR: nRF24L01 not detected! Check wiring, power, and SPI pins.");
+    }
+    else
+    {
+        Serial.println("nRF24L01 detected.");
+        radio.setPALevel(RF24_PA_MAX);
+        radio.setDataRate(RF24_250KBPS);
+        radio.setChannel(currentChannel);
+        radio.setCRCLength(RF24_CRC_8);
+        radio.disableDynamicPayloads();
+        radio.setAutoAck(false); //Best effort delivery
+        radio.openWritingPipe(SHARED_ADDRESS);
+        radio.openReadingPipe(1, SHARED_ADDRESS);
+        radio.startListening();
+
+        Serial.println("nRF24L01 configuration:");
+        radio.printDetails();
+    }
 
     // --- I2S Initialization (single port, starts in RX/speaker mode) ---
     i2sinit();

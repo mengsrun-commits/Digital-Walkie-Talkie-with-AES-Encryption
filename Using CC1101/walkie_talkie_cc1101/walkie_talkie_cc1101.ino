@@ -3,8 +3,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <SPI.h>
-#define RADIOLIB_DEBUG_BASIC 1
 #include <RadioLib.h>
+#define RADIOLIB_DEBUG_BASIC 1
 #include <driver/i2s.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,6 +16,7 @@
 #include "mbedtls/md.h"
 #include "mbedtls/base64.h"
 #include <Fonts/FreeMono9pt7b.h>
+#include <Fonts/TomThumb.h>
 
 // =================================================================
 // 1. PIN DEFINITIONS
@@ -29,10 +30,11 @@
 // Hardware Controls
 #define BUTTON 15
 #define LED_PIN 5
-#define ENABLE_ACTIVITY_LED 0
 #define POT_CHANNEL ADC1_CHANNEL_6
 #define BTN_LEFT 17
 #define BTN_RIGHT 16
+#define BTN_UP 26
+#define BTN_DOWN 27
 
 // INMP441 I2S Mic
 #define I2S_WS 25
@@ -66,7 +68,7 @@ bool ready = false;
 bool sent = false;
 volatile bool isProgramMode = false;
 volatile bool autoProgramMode = false;
-volatile bool usbSelection = true; // true for Yes, false for No
+volatile bool usbSelection = true; 
 volatile bool usbPromptActive = false;
 volatile bool usbRejected = false;
 bool hasDisplay = true;
@@ -88,7 +90,9 @@ enum DisplayState
     STATE_PROGRAM_PROMPT,
     STATE_PROGRAM_MODE,
     STATE_LOGGED_IN,
-    STATE_USB_DISCONNECTED
+    STATE_USB_DISCONNECTED,
+    STATE_MENU_LIST,
+    STATE_MENU_ATTEMPT_DECRYPT
 };
 volatile DisplayState displayState = STATE_STARTUP;
 
@@ -100,12 +104,13 @@ uint8_t dotCount = 0;
 // Timers
 unsigned long lastVolumeChange = 0;
 unsigned long lastReceiveTime = 0;
+unsigned long lastEncryptedSessionTime = 0;
 unsigned long lastAnimUpdate = 0;
 unsigned long startupTime = 0;
 unsigned long lastChannelActivity = 0;
 unsigned long disconnectTime = 0;
 unsigned long loginSuccessTime = 0;
-const unsigned long VOLUME_SHOW_DURATION = 2000;
+const unsigned long VOLUME_SHOW_DURATION = 1000;
 const unsigned long SCREEN_OFF_DELAY = 1000;
 const unsigned long STARTUP_SHOW_DURATION = 1500;
 const unsigned long RECEIVE_TIMEOUT = 500;
@@ -117,11 +122,26 @@ const unsigned long RAPID_CHANNEL_SWITCH_TIME = 100;
 // Radio & Buffers
 uint8_t currentChannel = 1;
 volatile bool channelUpdatePending = false;
-const uint8_t MAX_CHANNEL_VALUE = 31; // 433 + 31 = 464 MHz, the CC1101 band limit
+volatile bool radioKeyUpdatePending = false;
+const uint8_t MAX_CHANNEL_VALUE = 31;
 const uint8_t MIN_CHANNEL_VALUE = 1;
 const float CHANNEL_SPACING = 1.0; // MHz
-#define BASE_FREQUENCY 433 // MHz
+#define BASE_FREQUENCY 433        // MHz
 volatile bool currentChannelEncrypted = false;
+volatile bool attemptDecryptOnUnencrypted = false;
+volatile bool menuRightActionSelected = true;
+unsigned long transmitEnabledAt = 0;
+const unsigned long MENU_EXIT_TRANSMIT_LOCKOUT_MS = 300;
+
+static inline bool isMenuMode()
+{
+    return displayState == STATE_MENU_LIST || displayState == STATE_MENU_ATTEMPT_DECRYPT;
+}
+
+static inline bool walkieFeaturesPaused()
+{
+    return isProgramMode || isMenuMode();
+}
 
 #define SAMPLE_RATE 16000
 #define PACKET_SIZE 32
@@ -132,7 +152,7 @@ volatile bool currentChannelEncrypted = false;
 // --- AES-GCM encrypted channels ---
 // Encrypted packet layout (32 bytes total):
 //   [0]     : Packet type (ENC_PACKET_TYPE)
-//   [1-4]   : Packet counter (u32, plaintext) - forms per-packet GCM nonce suffix
+//   [1-4]   : Packet counter (u32, plaintext) — forms per-packet GCM nonce suffix
 //   [5-27]  : AES-GCM ciphertext (23 bytes)
 //   [28-31] : Truncated GCM auth tag (4 bytes)
 const uint8_t MAX_ENCRYPTED_CHANNELS = MAX_CHANNEL_VALUE - MIN_CHANNEL_VALUE + 1;
@@ -149,6 +169,7 @@ bool encryptedChannelLookup[MAX_CHANNEL_VALUE + 1] = {};
 #define ENC_TAG_SIZE 4           // truncated GCM tag
 #define ENC_COUNTER_SIZE 4       // packet counter field
 #define NONCE_TAG_SIZE 4         // auth tag on session nonce packet
+#define NONCE_BURST_COUNT 3      // repeat session nonce because radio ACKs are disabled
 
 static inline bool isEncryptedChannel(uint8_t channel)
 {
@@ -239,6 +260,14 @@ void storeEncryptedChannels(String channelList)
     refreshCurrentChannelEncryption();
 }
 
+uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
+volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
+uint8_t radioSessionNonce[8];          // per-PTT session nonce base
+volatile bool sessionNonceValid = false;
+uint8_t txNoncePacket[PACKET_SIZE];
+volatile bool txNoncePending = false;
+volatile uint8_t txNonceBurstRemaining = 0;
+
 void changeChannel(int8_t direction)
 {
     if (direction < 0)
@@ -251,6 +280,9 @@ void changeChannel(int8_t direction)
     }
 
     refreshCurrentChannelEncryption();
+    radioKeyUpdatePending = true;
+    sessionNonceValid = false;
+    lastEncryptedSessionTime = 0;
     channelUpdatePending = true;
     lastChannelActivity = millis();
 }
@@ -285,12 +317,12 @@ class CustomCC1101 : public CC1101 {
 };
 CustomCC1101 radio = new Module(CC1101_CS, CC1101_GDO0, RADIOLIB_NC, RADIOLIB_NC, spiCC);
 
-#define TX_RING_SIZE 6
-uint8_t txBuffer[TX_RING_SIZE][PACKET_SIZE];
-volatile bool bufferReady[TX_RING_SIZE] = {};
+uint8_t txBuffer[2][PACKET_SIZE];
+volatile bool bufferReady[2] = {false, false};
 volatile uint8_t fillBuffer = 0;
 volatile uint8_t txBufferIndex = 0;
 volatile int txFails = 0;
+volatile int txNonceFails = 0;
 volatile bool isTransmitting = false;
 
 // The CC1101 object belongs to radioTask alone. Any other task that needs a mode
@@ -306,33 +338,17 @@ const int RADIO_REQ_TIMEOUT_TICKS = 200;
 
 void resetTxBufferState()
 {
-    for (int i = 0; i < TX_RING_SIZE; i++)
-    {
-        bufferReady[i] = false;
-    }
+    bufferReady[0] = false;
+    bufferReady[1] = false;
     fillBuffer = 0;
     txBufferIndex = 0;
     txFails = 0;
-}
-
-bool requestRadioMode(uint8_t request)
-{
-    radioRequest = request;
-    for (int i = 0; i < RADIO_REQ_TIMEOUT_TICKS && radioRequest != RADIO_REQ_NONE; i++)
-    {
-        vTaskDelay(1);
-    }
-    if (radioRequest != RADIO_REQ_NONE)
-    {
-        radioRequest = RADIO_REQ_NONE;
-        return false;
-    }
-    return true;
+    txNonceFails = 0;
 }
 
 // Receive-side jitter ring buffer
-#define RX_RING_SIZE 32
-#define RX_PREFILL 2 // How many packets to fill before sending to amp
+#define RX_RING_SIZE 24
+#define RX_PREFILL 4 // How many packets to fill before sending to amp
 uint8_t rxRing[RX_RING_SIZE][PACKET_SIZE];
 volatile uint8_t rxHead = 0;
 volatile uint8_t rxTail = 0;
@@ -341,10 +357,29 @@ volatile bool rxPlaying = false;
 portMUX_TYPE rxCountMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool cc1101PacketInterrupt = false;
 TaskHandle_t radioTaskHandle = NULL;
-volatile uint32_t playbackDecodedFrames = 0;
-volatile uint32_t playbackSilentFrames = 0;
-volatile uint32_t playbackUnderrunFrames = 0;
-volatile uint32_t playbackShortWrites = 0;
+
+void enterMenu(DisplayState state)
+{
+    isTransmitting = false;
+    resetTxBufferState();
+    rxHead = 0;
+    rxTail = 0;
+    rxCount = 0;
+    rxPlaying = false;
+    digitalWrite(LED_PIN, LOW);
+    if (hasDisplay)
+    {
+        display.ssd1306_command(SSD1306_DISPLAYON);
+    }
+    displayState = state;
+}
+
+void exitMenu()
+{
+    displayState = STATE_IDLE;
+    scrollX = SCREEN_WIDTH;
+    transmitEnabledAt = millis() + MENU_EXIT_TRANSMIT_LOCKOUT_MS;
+}
 
 // ADPCM encoder state (persistent across frames during TX)
 struct ADPCMState
@@ -362,7 +397,7 @@ const int VOLUME_HYSTERESIS = 400;
 volatile float GAIN_FOR_UI = 1.0f; // Kept for drawing the OLED volume bar
 volatile int32_t GAIN = 256;       // OPTIMIZED: 1.0 = 256 for fast audio math
 const float GAIN_MIN = 0.1f;
-const float GAIN_MAX = 3.5f;
+const float GAIN_MAX = 2.5f;
 const int POT_AUTO_PROGRAM_THRESHOLD = 5;
 const int POT_OFF_THRESHOLD = 30;
 const int POT_ON_THRESHOLD = 150;
@@ -372,8 +407,8 @@ const int32_t LIMIT_PRE = 10000;
 const int32_t LIMIT_POST = 28000;
 
 // Raise this value if you still get feedback; lower it if soft speech is cut off.
-const int32_t NOISE_GATE_THRESHOLD = 300; // range: 0 (disabled) to ~32767 (full-scale); practical: 50-500
-const int32_t FIXED_MIC_GAIN = 179;       // 0.7x gain (256 = 1.0x)
+const int32_t NOISE_GATE_THRESHOLD = 350; // range: 0 (disabled) – ~32767 (full-scale); practical: 50–500
+const int32_t FIXED_MIC_GAIN = 512;       // 2.0x gain (256 = 1.0x)
 
 String b64encode(const unsigned char *input, size_t len)
 {
@@ -440,30 +475,22 @@ void setChannelSalt(uint8_t ch, const String &salt)
 // =================================================================
 // RADIO AES-GCM ENCRYPTION
 // =================================================================
-uint8_t radioKey[32];                  // AES-256 key (derived from Preferences radio password)
-uint8_t radioBaseNonce[8];             // 8-byte base; combined with counter to make 12-byte GCM nonce
-volatile uint32_t txPacketCounter = 0; // monotonically increasing TX sequence number
-uint8_t radioSessionNonce[8];          // per-PTT session nonce base
-volatile bool sessionNonceValid = false;
-uint8_t txNoncePacket[PACKET_SIZE];
-volatile bool txNoncePending = false;
-
-// Derive radioKey and radioBaseNonce deterministically from the stored radio password and channel salt.
+// Derive radioKey deterministically from the stored radio password and channel salt.
 // This keeps radio encryption consistent across devices with different login PASSWORD values.
-void initRadioEncryption()
+void initRadioEncryptionForChannel(uint8_t channel)
 {
 #if RADIO_DEBUG
     Serial.println("[Radio] Deriving channel encryption key from passwords...");
 #endif
     const char *storedRadioPassword = radioPassword.c_str();
 
-    String chSalt = getChannelSalt(currentChannel);
+    String chSalt = getChannelSalt(channel);
     if (chSalt.length() == 0 && radioSaltValue.length() > 0)
     {
         chSalt = radioSaltValue;
     }
 
-    // 1. Derive Radio Key: Key=storedRadioPassword, Salt=channel salt or SHA256(storedRadioPassword + suffix)
+    // Derive Radio Key: Key=storedRadioPassword, Salt=channel salt or SHA256(storedRadioPassword + suffix)
     uint8_t autoRadioKeySalt[32];
     const unsigned char *radioKeySalt = nullptr;
     size_t radioKeySaltLength = 0;
@@ -475,7 +502,7 @@ void initRadioEncryption()
     else
     {
         char radioSaltInput[64];
-        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, currentChannel);
+        snprintf(radioSaltInput, sizeof(radioSaltInput), "%s|ch_%d|radio_salt", storedRadioPassword, channel);
         mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                    (const unsigned char *)radioSaltInput, strlen(radioSaltInput),
                    autoRadioKeySalt);
@@ -488,25 +515,14 @@ void initRadioEncryption()
         radioKeySalt, radioKeySaltLength,
         5000, 32, radioKey);
 
-    // 2. Derive Nonce Base: Key=storedRadioPassword, Salt=SHA256(storedRadioPassword + suffix)
-    uint8_t nonceSalt[32];
-    char nonceSaltInput[64];
-    snprintf(nonceSaltInput, sizeof(nonceSaltInput), "%s|ch_%d|radio_salt_nonce", storedRadioPassword, currentChannel);
-    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-               (const unsigned char *)nonceSaltInput, strlen(nonceSaltInput),
-               nonceSalt);
-
-    uint8_t nonceBuf[32];
-    mbedtls_pkcs5_pbkdf2_hmac_ext(
-        MBEDTLS_MD_SHA256,
-        (const unsigned char *)storedRadioPassword, strlen(storedRadioPassword),
-        nonceSalt, sizeof(nonceSalt),
-        1000, 32, nonceBuf);
-    memcpy(radioBaseNonce, nonceBuf, 8);
-
 #if RADIO_DEBUG
     Serial.println("[Radio] Channel encryption ready (Password-derived).");
 #endif
+}
+
+void initRadioEncryption()
+{
+    initRadioEncryptionForChannel(currentChannel);
 }
 
 // Compute a 4-byte authentication tag for the session nonce using radioKey HMAC-SHA256
@@ -526,7 +542,7 @@ bool encryptRadioPacket(const uint8_t *plaintext, uint8_t *outPkt, uint32_t coun
 {
     if (!sessionNonceValid)
         return false;
-    // 12-byte GCM nonce = radioBaseNonce[8] + counter[4]
+    // 12-byte GCM nonce = radioSessionNonce[8] + counter[4]
     uint8_t nonce[12];
     memcpy(nonce, radioSessionNonce, 8);
     nonce[8] = (counter >> 24) & 0xFF;
@@ -553,12 +569,12 @@ bool encryptRadioPacket(const uint8_t *plaintext, uint8_t *outPkt, uint32_t coun
         &gcm, MBEDTLS_GCM_ENCRYPT, ENC_PLAINTEXT_SIZE,
         nonce, 12, NULL, 0,
         plaintext,
-        outPkt + 1 + ENC_COUNTER_SIZE, // ciphertext to bytes [5-27]
+        outPkt + 1 + ENC_COUNTER_SIZE, // ciphertext → bytes [5-27]
         16, fullTag);
     mbedtls_gcm_free(&gcm);
     if (ret != 0)
         return false;
-    // Copy first 4 bytes of tag to bytes [28-31]
+    // Copy first 4 bytes of tag → bytes [28-31]
     memcpy(outPkt + 1 + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE, fullTag, ENC_TAG_SIZE);
     return true;
 }
@@ -578,7 +594,7 @@ bool decryptRadioPacket(const uint8_t *inPkt, uint8_t *outPlaintext)
     nonce[10] = inPkt[3];
     nonce[11] = inPkt[4];
 
-    uint8_t fullTag[16];
+    const uint8_t *tag = inPkt + 1 + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE;
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, radioKey, 256) != 0)
@@ -586,17 +602,18 @@ bool decryptRadioPacket(const uint8_t *inPkt, uint8_t *outPlaintext)
         mbedtls_gcm_free(&gcm);
         return false;
     }
-    int ret = mbedtls_gcm_crypt_and_tag(
-        &gcm, MBEDTLS_GCM_DECRYPT, ENC_PLAINTEXT_SIZE,
-        nonce, 12, NULL, 0,
-        inPkt + 1 + ENC_COUNTER_SIZE, // ciphertext at bytes [5-27]
-        outPlaintext,
-        16, fullTag);
+
+    // The packet stores a truncated 4-byte GCM tag. Validate using the same
+    // truncated length on decrypt so we do not silently accept corrupted audio.
+    int ret = mbedtls_gcm_auth_decrypt(
+        &gcm, ENC_PLAINTEXT_SIZE,
+        nonce, 12,
+        NULL, 0,
+        tag, ENC_TAG_SIZE,
+        inPkt + 1 + ENC_COUNTER_SIZE,
+        outPlaintext);
     mbedtls_gcm_free(&gcm);
-    if (ret != 0)
-        return false;
-    // Verify truncated 4-byte tag
-    return (memcmp(fullTag, inPkt + 1 + ENC_COUNTER_SIZE + ENC_PLAINTEXT_SIZE, ENC_TAG_SIZE) == 0);
+    return (ret == 0);
 }
 
 // =================================================================
@@ -768,113 +785,159 @@ void switchToSpeakerPins()
     i2s_set_pin(I2S_NUM_0, &amp_pins);
 }
 
-inline void setActivityLed(bool on)
-{
-#if ENABLE_ACTIVITY_LED
-    digitalWrite(LED_PIN, on ? HIGH : LOW);
-#else
-    (void)on;
-#endif
-}
-
 // =================================================================
 // 5. FREERTOS TASKS
 // =================================================================
 
-void IRAM_ATTR cc1101PacketISR()
+volatile uint32_t rxOverflowCount = 0;
+static const SPISettings cc1101SpiSettings(4000000, MSBFIRST, SPI_MODE0);
+
+inline void cc1101_cs_select()
 {
-    cc1101PacketInterrupt = true;
-    BaseType_t higherPriorityTaskWoken = pdFALSE;
-    if (radioTaskHandle != NULL)
+    digitalWrite(CC1101_CS, LOW);
+    uint32_t t = 0;
+    while (digitalRead(CC1101_MISO) && t++ < 1000)
     {
-        vTaskNotifyGiveFromISR(radioTaskHandle, &higherPriorityTaskWoken);
-    }
-    if (higherPriorityTaskWoken)
-    {
-        portYIELD_FROM_ISR();
+        // wait for MISO ready
     }
 }
 
-// Helpers for CC1101 fixed-length packets.
+inline void cc1101_cs_deselect()
+{
+    digitalWrite(CC1101_CS, HIGH);
+}
+
+// Direct CC1101 SPI primitives
+inline void cc1101_strobe(uint8_t cmd)
+{
+    spiCC.beginTransaction(cc1101SpiSettings);
+    cc1101_cs_select();
+    spiCC.transfer(cmd);
+    cc1101_cs_deselect();
+    spiCC.endTransaction();
+}
+
+inline uint8_t cc1101_read_reg(uint8_t reg)
+{
+    spiCC.beginTransaction(cc1101SpiSettings);
+    cc1101_cs_select();
+    spiCC.transfer(reg | 0x80);
+    uint8_t val = spiCC.transfer(0x00);
+    cc1101_cs_deselect();
+    spiCC.endTransaction();
+    return val;
+}
+
+inline uint8_t cc1101_read_status_reg(uint8_t reg)
+{
+    spiCC.beginTransaction(cc1101SpiSettings);
+    cc1101_cs_select();
+    spiCC.transfer(reg | 0xC0); // CC1101 requires 0xC0 (read+burst) for status registers 0x30-0x3D
+    uint8_t val = spiCC.transfer(0x00);
+    cc1101_cs_deselect();
+    spiCC.endTransaction();
+    return val;
+}
+
+inline uint8_t cc1101_get_marcstate()
+{
+    return cc1101_read_status_reg(0x35) & 0x1F;
+}
+
+inline uint8_t cc1101_get_rxbytes()
+{
+    // Double read to prevent asynchronous FIFO pointer read glitch
+    uint8_t r1 = cc1101_read_status_reg(0x3B);
+    uint8_t r2 = cc1101_read_status_reg(0x3B);
+    while (r1 != r2)
+    {
+        r1 = r2;
+        r2 = cc1101_read_status_reg(0x3B);
+    }
+    return r1;
+}
+
+inline void cc1101_write_fifo(const uint8_t *buf, uint8_t len)
+{
+    spiCC.beginTransaction(cc1101SpiSettings);
+    cc1101_cs_select();
+    spiCC.transfer(0x3F | 0x40); // 0x7F: Burst write to TX FIFO
+    for (uint8_t i = 0; i < len; i++)
+    {
+        spiCC.transfer(buf[i]);
+    }
+    cc1101_cs_deselect();
+    spiCC.endTransaction();
+}
+
+inline void cc1101_read_fifo(uint8_t *buf, uint8_t len)
+{
+    spiCC.beginTransaction(cc1101SpiSettings);
+    cc1101_cs_select();
+    spiCC.transfer(0x3F | 0xC0); // 0xFF: Burst read from RX FIFO
+    for (uint8_t i = 0; i < len; i++)
+    {
+        buf[i] = spiCC.transfer(0x00);
+    }
+    cc1101_cs_deselect();
+    spiCC.endTransaction();
+}
+
+// Helpers for CC1101 fixed-length packets (Pure polling)
 bool cc1101_available()
 {
-    uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
-    if (marc == 0x11)
+    uint8_t rxBytes = cc1101_get_rxbytes();
+    if (rxBytes & 0x80) // Bit 7: RX FIFO overflow
     {
-        radio.standby();
-        radio.SPIsendCommand(0x3A); // SFRX
-        radio.startReceive();
+        rxOverflowCount++;
+        cc1101_strobe(0x36); // SIDLE
+        cc1101_strobe(0x3A); // SFRX
+        cc1101_strobe(0x34); // SRX
         return false;
     }
-
-    uint8_t rxBytes = radio.SPIgetRegValue(0x3B, 6, 0);
-    if (rxBytes >= PACKET_SIZE)
-    {
-        uint8_t rxBytes2 = radio.SPIgetRegValue(0x3B, 6, 0);
-        return rxBytes2 >= PACKET_SIZE;
-    }
-    return false;
+    return (rxBytes & 0x7F) >= PACKET_SIZE;
 }
 
 bool cc1101_read(uint8_t *buf, uint8_t len)
 {
-    int state = radio.readData(buf, len);
-    if (state != RADIOLIB_ERR_NONE)
-    {
-        radio.standby();
-        radio.SPIsendCommand(0x3A); // SFRX
-    }
-    // RadioLib's readData() leaves the CC1101 in IDLE after every read.
-    // We MUST re-arm RX so the radio keeps listening for the next packet.
-    radio.startReceive();
-    return state == RADIOLIB_ERR_NONE;
+    cc1101_read_fifo(buf, len);
+    return true;
 }
 
 bool cc1101_write(const uint8_t *buf, uint8_t len)
 {
-    // Put radio into IDLE first, flush TX FIFO, then transmit
-    radio.standby();
-    radio.SPIsendCommand(0x3B); // SFTX — flush any stale TX data
+    cc1101_strobe(0x36); // SIDLE
+    cc1101_strobe(0x3B); // SFTX — flush TX FIFO
+    cc1101_write_fifo(buf, len);
+    cc1101_strobe(0x35); // STX — start transmission
 
-    int state = radio.startTransmit((uint8_t *)buf, len);
-    if (state != RADIOLIB_ERR_NONE)
-    {
-        return false;
-    }
-
-    // Wait for TX to complete by polling MARCSTATE.
-    // At 250 kbps a 32-byte packet takes ~1.5 ms. We allow up to 15 ms.
-    // MARCSTATE values: 0x13 = TX, 0x01 = IDLE (TX done).
+    // Fast poll MARCSTATE until packet finishes (returns to IDLE 0x01)
+    // At 250 kbps a 32-byte packet takes ~1.2 ms on air.
     unsigned long startTx = millis();
     while (true)
     {
-        uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
+        uint8_t marc = cc1101_get_marcstate();
         if (marc == 0x01)
         {
-            break; // TX finished, radio returned to IDLE
+            break; // TX done
         }
-        if (millis() - startTx > 15)
+        if (millis() - startTx > 8)
         {
-            state = RADIOLIB_ERR_TX_TIMEOUT;
-            radio.standby();
-            break;
+            cc1101_strobe(0x36); // SIDLE
+            cc1101_strobe(0x3B); // SFTX
+            return false;
         }
-        taskYIELD();
     }
 
-    return state == RADIOLIB_ERR_NONE;
+    return true;
 }
 
-// Manual frequency calibration. With FS_AUTOCAL disabled (see cc1101_init) the radio no
-// longer recalibrates on every IDLE->TX/RX transition. That ~720us-per-packet calibration
-// was the main reason the CC1101 could not keep up with the ~300-400 packet/sec audio rate.
-// Instead we calibrate once, here, whenever we (re)enter RX or start a transmission.
 void cc1101_calibrate()
 {
-    radio.standby();            // SIDLE -> IDLE
-    radio.SPIsendCommand(0x33); // SCAL: calibrate, auto-returns to IDLE when finished
+    cc1101_strobe(0x36); // SIDLE
+    cc1101_strobe(0x33); // SCAL
     unsigned long start = millis();
-    while (radio.SPIgetRegValue(0x35, 4, 0) != 0x01) // wait for MARCSTATE = IDLE
+    while (cc1101_get_marcstate() != 0x01) // wait for MARCSTATE = IDLE
     {
         if (millis() - start > 5)
             break;
@@ -883,14 +946,12 @@ void cc1101_calibrate()
 
 void cc1101_start_rx()
 {
-    cc1101PacketInterrupt = false;
-    radio.standby();
-    radio.SPIsendCommand(0x3A); // SFRX
+    cc1101_strobe(0x36); // SIDLE
+    cc1101_strobe(0x3A); // SFRX
     radio.setFrequency(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING);
-    cc1101_calibrate(); // calibrate for this frequency (FS_AUTOCAL is disabled)
-    radio.startReceive();
+    cc1101_calibrate();
+    cc1101_strobe(0x34); // SRX — enter RX
 }
-
 
 void audioCaptureTask(void *param)
 {
@@ -900,15 +961,19 @@ void audioCaptureTask(void *param)
 
     while (1)
     {
-        if (!isTransmitting || isProgramMode)
+        if (!isTransmitting || walkieFeaturesPaused())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        while (bufferReady[fillBuffer])
+        while (isTransmitting && !walkieFeaturesPaused() && bufferReady[fillBuffer])
         {
             vTaskDelay(1);
+        }
+        if (!isTransmitting || walkieFeaturesPaused())
+        {
+            continue;
         }
 
         bool useEncryption = currentChannelEncrypted;
@@ -921,7 +986,7 @@ void audioCaptureTask(void *param)
         int frameSamples = useEncryption ? ENC_SAMPLES_PER_FRAME : SAMPLES_PER_FRAME;
 
         i2s_read(I2S_NUM_0, rawBuffer, frameSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
-        if (!isTransmitting || isProgramMode)
+        if (!isTransmitting || walkieFeaturesPaused())
         {
             continue;
         }
@@ -945,14 +1010,19 @@ void audioCaptureTask(void *param)
 
         if (useEncryption)
         {
-            // --- ENCRYPTED PATH (Channel 90) ---
+            // --- ENCRYPTED PATH ---
             // Plaintext: [pred_hi][pred_lo][index][adpcm_data x20] = 23 bytes
             uint8_t plaintext[ENC_PLAINTEXT_SIZE];
             if (peak < NOISE_GATE_THRESHOLD)
             {
-                memset(plaintext, 0, ENC_PLAINTEXT_SIZE);
                 txAdpcmState.predicted = 0;
                 txAdpcmState.index = 0;
+                memset(pcmBuffer, 0, ENC_SAMPLES_PER_FRAME * sizeof(int16_t));
+                plaintext[0] = 0;
+                plaintext[1] = 0;
+                plaintext[2] = 0;
+                adpcmEncode(pcmBuffer, &plaintext[ENC_HEADER_SIZE],
+                            ENC_SAMPLES_PER_FRAME, &txAdpcmState);
             }
             else
             {
@@ -967,25 +1037,32 @@ void audioCaptureTask(void *param)
                 plaintext[0] = (uint8_t)(txAdpcmState.predicted >> 8);
                 plaintext[1] = (uint8_t)(txAdpcmState.predicted & 0xFF);
                 plaintext[2] = txAdpcmState.index;
-                // Encode 40 samples to 20 bytes ADPCM
+                // Encode 40 samples → 20 bytes ADPCM
                 adpcmEncode(pcmBuffer, &plaintext[ENC_HEADER_SIZE],
                             ENC_SAMPLES_PER_FRAME, &txAdpcmState);
             }
             uint32_t counter = txPacketCounter++;
-            encryptRadioPacket(plaintext, txBuffer[fillBuffer], counter);
+            if (!encryptRadioPacket(plaintext, txBuffer[fillBuffer], counter))
+            {
+                vTaskDelay(1);
+                continue;
+            }
         }
         else
         {
-            // --- UNENCRYPTED PATH (all other channels) ---
+            // --- UNENCRYPTED PATH ---
             if (peak < NOISE_GATE_THRESHOLD)
             {
                 memset(txBuffer[fillBuffer], 0, PACKET_SIZE);
+                txAdpcmState.predicted = 0;
+                txAdpcmState.index = 0;
+                memset(pcmBuffer, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
                 txBuffer[fillBuffer][0] = UNENC_PACKET_TYPE;
                 txBuffer[fillBuffer][1] = 0;
                 txBuffer[fillBuffer][2] = 0;
                 txBuffer[fillBuffer][3] = 0;
-                txAdpcmState.predicted = 0;
-                txAdpcmState.index = 0;
+                adpcmEncode(pcmBuffer, &txBuffer[fillBuffer][UNENC_HEADER_SIZE],
+                            SAMPLES_PER_FRAME, &txAdpcmState);
             }
             else
             {
@@ -1001,193 +1078,279 @@ void audioCaptureTask(void *param)
                 txBuffer[fillBuffer][1] = (uint8_t)(txAdpcmState.predicted >> 8);
                 txBuffer[fillBuffer][2] = (uint8_t)(txAdpcmState.predicted & 0xFF);
                 txBuffer[fillBuffer][3] = txAdpcmState.index;
-                // Encode current frame to ADPCM data
+                // Encode current frame → ADPCM data
                 adpcmEncode(pcmBuffer, &txBuffer[fillBuffer][UNENC_HEADER_SIZE],
                             frameSamples, &txAdpcmState);
             }
         }
 
-        bufferReady[fillBuffer] = true;
-        fillBuffer = (fillBuffer + 1) % TX_RING_SIZE;
+        if (isTransmitting && !walkieFeaturesPaused())
+        {
+            bufferReady[fillBuffer] = true;
+            fillBuffer ^= 1;
+        }
         vTaskDelay(1);
     }
 }
 
-// Radio-only task: handles TX and RX without ever blocking on I2S.
-// This is the ONLY task that touches the CC1101 SPI bus.
+// Switch the radio to TX and open a new encrypted session. radioTask only.
+// isTransmitting is set last so audioCaptureTask never sees a half-built session.
+void applyRadioTxMode()
+{
+    radio.standby();
+    radio.SPIsendCommand(0x3B); // SFTX
+    radio.SPIsendCommand(0x3A); // SFRX
+    cc1101_calibrate();
+    resetTxBufferState();
+    txNoncePending = false;
+    txNonceBurstRemaining = 0;
+
+    if (currentChannelEncrypted)
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            radioSessionNonce[i] = (uint8_t)random(0, 256);
+        }
+        sessionNonceValid = true;
+        txPacketCounter = 0;
+
+        memset(txNoncePacket, 0, PACKET_SIZE);
+        txNoncePacket[0] = NONCE_PACKET_TYPE;
+        memcpy(&txNoncePacket[1], radioSessionNonce, 8);
+        computeNonceTag(radioSessionNonce, &txNoncePacket[1 + 8]);
+        txNoncePending = true;
+        txNonceBurstRemaining = NONCE_BURST_COUNT;
+    }
+#if RADIO_DEBUG
+    Serial.print("[Radio] New session nonce: ");
+    for (int i = 0; i < 8; i++)
+    {
+        if (radioSessionNonce[i] < 16)
+            Serial.print('0');
+        Serial.print(radioSessionNonce[i], HEX);
+    }
+    Serial.println();
+#endif
+    txAdpcmState.predicted = 0;
+    txAdpcmState.index = 0;
+    isTransmitting = true;
+}
+
+// Return the radio to RX and drop any in-flight TX session state. radioTask only.
+void applyRadioRxMode()
+{
+    isTransmitting = false;
+    radio.SPIsendCommand(0x3B); // SFTX
+    cc1101_start_rx();
+
+    sessionNonceValid = false;
+    lastEncryptedSessionTime = 0;
+    txNoncePending = false;
+    txNonceBurstRemaining = 0;
+    resetTxBufferState();
+
+    // Reset jitter buffer for clean playback
+    rxHead = 0;
+    rxTail = 0;
+    rxCount = 0;
+    rxPlaying = false;
+}
+
+// Hand a mode change to radioTask and wait for it to land, so the caller can keep
+// sequencing its own work afterwards. Returns false if radioTask never picked it up.
+bool requestRadioMode(uint8_t request)
+{
+    radioRequest = request;
+    for (int i = 0; i < RADIO_REQ_TIMEOUT_TICKS && radioRequest != RADIO_REQ_NONE; i++)
+    {
+        vTaskDelay(1);
+    }
+    if (radioRequest != RADIO_REQ_NONE)
+    {
+        radioRequest = RADIO_REQ_NONE;
+        return false;
+    }
+    return true;
+}
+
+// Radio-only task: handles TX and RX without ever blocking on I2S
 void radioTask(void *param)
 {
     radioTaskHandle = xTaskGetCurrentTaskHandle();
-    static unsigned long lastTxPrint = 0;
-    static unsigned long lastRxPrint = 0;
-    static int txSuccessCount = 0;
-    static int txFailCount = 0;
-    static int rxPacketCount = 0;
-    static int rxUnencCount = 0;
-    static int rxEncCount = 0;
-    static int rxUnknownCount = 0;
+    static unsigned long lastTxStats = 0;
+    static unsigned long lastRxStats = 0;
+    static uint32_t txSecSuccess = 0;
+    static uint32_t txSecFails = 0;
+    static uint32_t rxSecTotal = 0;
+    static uint32_t rxSecUnenc = 0;
+    static uint32_t rxSecEnc = 0;
+    static uint32_t rxSecNonce = 0;
+    static uint32_t rxSecUnknown = 0;
 
     while (1)
     {
-        // --- Handle mode-switch requests from buttonTask (runs on Core 0) ---
-        uint8_t req = radioRequest;
-        if (req == RADIO_REQ_TX)
+        uint8_t request = radioRequest;
+        if (request != RADIO_REQ_NONE)
         {
-            // Transition radio into TX-ready state
-            radio.standby();
-            radio.SPIsendCommand(0x3B); // SFTX
-            radio.SPIsendCommand(0x3A); // SFRX
-            cc1101_calibrate();
-            radioRequest = RADIO_REQ_NONE; // signal back to buttonTask
-        }
-        else if (req == RADIO_REQ_RX)
-        {
-            // Transition radio back to RX
-            radio.SPIsendCommand(0x3B); // SFTX
-            cc1101_start_rx();
-            radioRequest = RADIO_REQ_NONE; // signal back to buttonTask
+            if (request == RADIO_REQ_TX)
+            {
+                applyRadioTxMode();
+            }
+            else
+            {
+                applyRadioRxMode();
+            }
+            radioRequest = RADIO_REQ_NONE;
         }
 
         if (channelUpdatePending)
         {
             cc1101_start_rx();
             channelUpdatePending = false;
+            radioKeyUpdatePending = true;
         }
 
-        if (isTransmitting && !isProgramMode)
+        if (radioKeyUpdatePending)
         {
+            uint8_t keyChannel = currentChannel;
+            initRadioEncryptionForChannel(keyChannel);
+            sessionNonceValid = false;
+            if (currentChannel == keyChannel)
+            {
+                radioKeyUpdatePending = false;
+            }
+        }
+
+        if (isTransmitting && !walkieFeaturesPaused())
+        {
+            // --- TRANSMIT MODE ---
             if (txNoncePending)
             {
                 if (cc1101_write(txNoncePacket, PACKET_SIZE))
                 {
-                    txNoncePending = false;
-                    txSuccessCount++;
+                    if (txNonceBurstRemaining > 0)
+                    {
+                        txNonceBurstRemaining--;
+                    }
+                    txNoncePending = txNonceBurstRemaining > 0;
+                    txNonceFails = 0;
+                    txFails = 0;
+                    txSecSuccess++;
                 }
                 else
                 {
-                    txFailCount++;
+                    txNonceFails++;
+                    txSecFails++;
+                    if (txNonceFails > 10)
+                    {
+                        cc1101_strobe(0x36); // SIDLE
+                        cc1101_strobe(0x3B); // SFTX
+                        cc1101_calibrate();
+                        txNonceFails = 0;
+                    }
                 }
                 taskYIELD();
                 continue;
             }
-
             if (bufferReady[txBufferIndex])
             {
                 if (cc1101_write(txBuffer[txBufferIndex], PACKET_SIZE))
                 {
                     bufferReady[txBufferIndex] = false;
                     txFails = 0;
-                    txSuccessCount++;
-                    txBufferIndex = (txBufferIndex + 1) % TX_RING_SIZE;
+                    txBufferIndex ^= 1;
+                    txSecSuccess++;
                 }
                 else
                 {
                     txFails++;
-                    txFailCount++;
+                    txSecFails++;
                     if (txFails > 10)
                     {
-                        radio.standby();
-                        radio.SPIsendCommand(0x3B); // SFTX
+                        cc1101_strobe(0x36); // SIDLE
+                        cc1101_strobe(0x3B); // SFTX
+                        cc1101_calibrate();
                         txFails = 0;
                     }
                 }
-
-                if (millis() - lastTxPrint > 2000)
-                {
-                    lastTxPrint = millis();
-#if RADIO_DEBUG
-                    Serial.printf("TX: %d ok, %d fail | CH=%d F=%.2f MHz encrypted=%d\n",
-                                  txSuccessCount, txFailCount, currentChannel,
-                                  (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING),
-                                  currentChannelEncrypted);
-#endif
-                    txSuccessCount = 0;
-                    txFailCount = 0;
-                }
             }
+
+#if RADIO_DEBUG
+            if (millis() - lastTxStats >= 1000)
+            {
+                lastTxStats = millis();
+                Serial.printf("[TX Debug] %lu pkts/sec (fails=%lu) | CH=%d F=%.2f MHz | Enc=%d\n",
+                              txSecSuccess, txSecFails, currentChannel,
+                              (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING),
+                              currentChannelEncrypted);
+                txSecSuccess = 0;
+                txSecFails = 0;
+            }
+#endif
             taskYIELD();
         }
-        else if (!isProgramMode)
+        else if (!walkieFeaturesPaused())
         {
-            if (!cc1101PacketInterrupt)
+            // --- RECEIVE MODE (Pure polling, identical to nRF) ---
+            // Drain all available radio packets into jitter ring buffer
+            if (cc1101_available())
             {
-                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
-            }
-
-            if (cc1101PacketInterrupt || cc1101_available())
-            {
-                cc1101PacketInterrupt = false;
-                while (cc1101_available())
+                while (cc1101_available() && rxCount < RX_RING_SIZE)
                 {
                     uint8_t pkt[PACKET_SIZE];
                     if (!cc1101_read(pkt, PACKET_SIZE))
                     {
                         break;
                     }
-                    bool enqueuePacket = false;
+                    rxSecTotal++;
 
                     if (pkt[0] == NONCE_PACKET_TYPE)
                     {
+                        rxSecNonce++;
                         if (currentChannelEncrypted)
                         {
-                            // Authenticate the nonce packet with HMAC tag
                             uint8_t expectedTag[NONCE_TAG_SIZE];
                             computeNonceTag(&pkt[1], expectedTag);
-                            if (memcmp(expectedTag, &pkt[9], NONCE_TAG_SIZE) == 0)
+                            if (memcmp(expectedTag, &pkt[1 + 8], NONCE_TAG_SIZE) == 0)
                             {
                                 memcpy(radioSessionNonce, &pkt[1], 8);
                                 sessionNonceValid = true;
+                                lastEncryptedSessionTime = millis();
 #if RADIO_DEBUG
-                                Serial.println("[Radio] Nonce authenticated OK");
+                                Serial.print("[Radio] Received authenticated session nonce: ");
+                                for (int i = 0; i < 8; i++)
+                                {
+                                    if (radioSessionNonce[i] < 16)
+                                        Serial.print('0');
+                                    Serial.print(radioSessionNonce[i], HEX);
+                                }
+                                Serial.println();
 #endif
                             }
+#if RADIO_DEBUG
                             else
                             {
-#if RADIO_DEBUG
-                                Serial.println("[Radio] Nonce tag mismatch — dropped (wrong key?)");
-#endif
+                                Serial.println("[Radio] Dropped session nonce with invalid key tag.");
                             }
+#endif
                         }
                         continue;
                     }
-
-                    if (pkt[0] == ENC_PACKET_TYPE && !currentChannelEncrypted)
-                    {
-                        continue;
-                    }
-
                     if (pkt[0] == UNENC_PACKET_TYPE)
                     {
-                        rxUnencCount++;
-                        enqueuePacket = true;
+                        rxSecUnenc++;
                     }
                     else if (pkt[0] == ENC_PACKET_TYPE)
                     {
-                        rxEncCount++;
-                        enqueuePacket = currentChannelEncrypted;
+                        rxSecEnc++;
+                        if (!currentChannelEncrypted && !attemptDecryptOnUnencrypted)
+                        {
+                            continue;
+                        }
                     }
                     else
                     {
-                        rxUnknownCount++;
-                        // A bad first byte means the FIFO is not aligned to packet starts.
-                        // Flush once so the next sync word starts a clean 32-byte packet.
-                        radio.standby();
-                        radio.SPIsendCommand(0x3A); // SFRX
-                        radio.startReceive();
-                        break;
-                    }
-
-                    if (!enqueuePacket)
-                    {
-                        continue;
-                    }
-
-                    if (rxCount >= RX_RING_SIZE)
-                    {
-                        rxTail = (rxTail + 1) % RX_RING_SIZE;
-                        portENTER_CRITICAL(&rxCountMux);
-                        rxCount--;
-                        portEXIT_CRITICAL(&rxCountMux);
+                        rxSecUnknown++;
                     }
 
                     memcpy(rxRing[rxHead], pkt, PACKET_SIZE);
@@ -1195,58 +1358,37 @@ void radioTask(void *param)
                     portENTER_CRITICAL(&rxCountMux);
                     rxCount++;
                     portEXIT_CRITICAL(&rxCountMux);
-                    rxPacketCount++;
                 }
             }
 
-            if (!isTransmitting && rxCount == 0 && (millis() - lastReceiveTime > RECEIVE_TIMEOUT))
+            if (!isTransmitting && rxCount == 0 && (millis() - lastEncryptedSessionTime > RECEIVE_TIMEOUT))
             {
                 sessionNonceValid = false;
             }
 
-            if (millis() - lastRxPrint > 2000)
+#if RADIO_DEBUG
+            if (millis() - lastRxStats >= 1000)
             {
-                lastRxPrint = millis();
-                uint8_t marc = radio.SPIgetRegValue(0x35, 4, 0);
-#if RADIO_DEBUG
-                uint8_t rxb = radio.SPIgetRegValue(0x3B, 6, 0);
-                uint32_t decodedFrames = playbackDecodedFrames;
-                uint32_t silentFrames = playbackSilentFrames;
-                uint32_t underrunFrames = playbackUnderrunFrames;
-                uint32_t shortWrites = playbackShortWrites;
-                playbackDecodedFrames = 0;
-                playbackSilentFrames = 0;
-                playbackUnderrunFrames = 0;
-                playbackShortWrites = 0;
-
-                Serial.printf("RX: %d pkts u=%d e=%d ?=%d | play=%lu silent=%lu under=%lu short=%lu | MARC=0x%02X RXBYTES=%d ring=%d/%d CH=%d F=%.2f encrypted=%d\n",
-                              rxPacketCount, rxUnencCount, rxEncCount, rxUnknownCount,
-                              decodedFrames, silentFrames, underrunFrames, shortWrites,
-                              marc, rxb, rxCount, RX_RING_SIZE, currentChannel,
-                              (float)(BASE_FREQUENCY + currentChannel * CHANNEL_SPACING),
-                              currentChannelEncrypted);
-#endif
-                rxPacketCount = 0;
-                rxUnencCount = 0;
-                rxEncCount = 0;
-                rxUnknownCount = 0;
-
-                // Cheap health check kept in the hot path: recover if the radio fell into
-                // RX FIFO overflow (0x11) or a stuck state (0x16).
-                if (marc == 0x11 || marc == 0x16)
+                lastRxStats = millis();
+                if (rxSecTotal > 0 || rxOverflowCount > 0)
                 {
-#if RADIO_DEBUG
-                    Serial.printf("RX: error state 0x%02X, recovering\n", marc);
-#endif
-                    cc1101_start_rx();
+                    uint8_t marc = cc1101_get_marcstate();
+                    uint8_t rxb = cc1101_get_rxbytes();
+                    Serial.printf("[RX Debug] %lu pkts/s (OFLW=%lu) | unenc=%lu, enc=%lu, unk=%lu | Ring=%d/%d | MARC=0x%02X RXBYTES=%d\n",
+                                  rxSecTotal, rxOverflowCount,
+                                  rxSecUnenc, rxSecEnc, rxSecUnknown,
+                                  rxCount, RX_RING_SIZE, marc, rxb & 0x7F);
+                    rxSecTotal = 0;
+                    rxSecUnenc = 0;
+                    rxSecEnc = 0;
+                    rxSecNonce = 0;
+                    rxSecUnknown = 0;
+                    rxOverflowCount = 0;
                 }
             }
+#endif
 
-            vTaskDelay(1);
-        }
-        else
-        {
-            vTaskDelay(pdMS_TO_TICKS(20));
+            vTaskDelay(1); // Yield briefly, come back quickly to check radio again (exact nRF logic)
         }
     }
 }
@@ -1261,7 +1403,7 @@ void playbackTask(void *param)
 
     while (1)
     {
-        if (isTransmitting || isProgramMode)
+        if (isTransmitting || walkieFeaturesPaused())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -1300,11 +1442,10 @@ void playbackTask(void *param)
                     samplesOut = ENC_SAMPLES_PER_FRAME;
                     decoded = true;
                 }
-                // If decryption failed (wrong key), decoded stays false → silently dropped
             }
-            else if (isEncPkt && !channelEncrypted)
+            else if (isEncPkt && !channelEncrypted && attemptDecryptOnUnencrypted)
             {
-                // Encrypted packet on an unencrypted channel -> decode as raw ADPCM (noise)
+                // Optional noisy demonstration mode: treat encrypted payload bytes like plain ADPCM.
                 ADPCMState rxState;
                 rxState.predicted = (int16_t)((pkt[1] << 8) | pkt[2]);
                 rxState.index = pkt[3];
@@ -1337,6 +1478,10 @@ void playbackTask(void *param)
             {
                 // Only update UI state & LED when we actually decoded audio
                 lastReceiveTime = millis();
+                if (packetType == ENC_PACKET_TYPE)
+                {
+                    lastEncryptedSessionTime = lastReceiveTime;
+                }
                 if (displayState == STATE_IDLE)
                 {
                     displayState = STATE_RECEIVE;
@@ -1362,6 +1507,7 @@ void playbackTask(void *param)
                 }
                 underrunCount = 0;
                 digitalWrite(LED_PIN, HIGH);
+                i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
             }
             else
             {
@@ -1371,21 +1517,17 @@ void playbackTask(void *param)
         }
         else
         {
-            // Underrun — output silence but tolerate brief gaps
             memset(stereoBuf, 0, sizeof(stereoBuf));
-            if (rxPlaying)
+            underrunCount++;
+            if (underrunCount >= 3)
             {
-                underrunCount++;
-                if (underrunCount >= 8)
-                {
-                    rxPlaying = false;
-                    underrunCount = 0;
-                }
+                rxPlaying = false;
+                underrunCount = 0;
             }
+            i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
             digitalWrite(LED_PIN, LOW);
+            vTaskDelay(1);
         }
-        // i2s_write paces playback naturally
-        i2s_write(I2S_NUM_0, stereoBuf, samplesOut * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
     }
 }
 
@@ -1394,6 +1536,9 @@ void buttonTask(void *param)
 {
     bool lastLeft = HIGH;
     bool lastRight = HIGH;
+    bool lastUp = HIGH;
+    bool lastDown = HIGH;
+    bool lastPtt = false;
     unsigned long lastPttChange = 0;
     const unsigned long PTT_DEBOUNCE_MS = 50;
 
@@ -1402,7 +1547,52 @@ void buttonTask(void *param)
         bool pressed = !digitalRead(BUTTON);
         bool leftState = digitalRead(BTN_LEFT);
         bool rightState = digitalRead(BTN_RIGHT);
+        bool upState = digitalRead(BTN_UP);
+        bool downState = digitalRead(BTN_DOWN);
         unsigned long now = millis();
+
+        if (isMenuMode())
+        {
+            if (leftState == LOW && lastLeft == HIGH)
+            {
+                menuRightActionSelected = false;
+            }
+            if (rightState == LOW && lastRight == HIGH)
+            {
+                menuRightActionSelected = true;
+            }
+            if (pressed && !lastPtt && (now - lastPttChange >= PTT_DEBOUNCE_MS))
+            {
+                lastPttChange = now;
+                if (!menuRightActionSelected)
+                {
+                    if (displayState == STATE_MENU_ATTEMPT_DECRYPT)
+                    {
+                        enterMenu(STATE_MENU_LIST);
+                    }
+                    else
+                    {
+                        exitMenu();
+                    }
+                }
+                else if (displayState == STATE_MENU_LIST)
+                {
+                    enterMenu(STATE_MENU_ATTEMPT_DECRYPT);
+                }
+                else
+                {
+                    attemptDecryptOnUnencrypted = !attemptDecryptOnUnencrypted;
+                    preferences.putBool("attempt_dec", attemptDecryptOnUnencrypted);
+                }
+            }
+            lastLeft = leftState;
+            lastRight = rightState;
+            lastUp = upState;
+            lastDown = downState;
+            lastPtt = pressed;
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
         if (displayState == STATE_PROGRAM_PROMPT)
         {
@@ -1442,82 +1632,48 @@ void buttonTask(void *param)
             }
             lastLeft = leftState;
             lastRight = rightState;
+            lastUp = upState;
+            lastDown = downState;
+            lastPtt = pressed;
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        if (pressed && !isTransmitting && !isProgramMode && (now - lastPttChange >= PTT_DEBOUNCE_MS))
+        if (pressed && !lastPtt && !isTransmitting && !walkieFeaturesPaused() && now >= transmitEnabledAt && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
             lastPttChange = now;
 
-            // Ask radioTask (Core 1) to transition the CC1101 into TX-ready state.
-            // This avoids SPI bus collisions between Core 0 and Core 1.
-            requestRadioMode(RADIO_REQ_TX);
-
             switchToMicPins();
 
-            if (currentChannelEncrypted)
+            if (!requestRadioMode(RADIO_REQ_TX))
             {
-                for (int i = 0; i < 8; i++)
-                {
-                    radioSessionNonce[i] = (uint8_t)random(0, 256);
-                }
-                sessionNonceValid = true;
-                txPacketCounter = 0;
-
-                memset(txNoncePacket, 0, PACKET_SIZE);
-                txNoncePacket[0] = NONCE_PACKET_TYPE;
-                memcpy(&txNoncePacket[1], radioSessionNonce, 8);
-                // Attach HMAC auth tag so the receiver can verify the nonce came from a matching key
-                computeNonceTag(radioSessionNonce, &txNoncePacket[9]);
-                txNoncePending = true;
+                // radioTask never applied it — don't leave I2S pointed at the mic.
+                switchToSpeakerPins();
             }
-#if RADIO_DEBUG
-            Serial.print("[Radio] New session nonce: ");
-            for (int i = 0; i < 8; i++)
+            else
             {
-                if (radioSessionNonce[i] < 16)
-                    Serial.print('0');
-                Serial.print(radioSessionNonce[i], HEX);
-            }
-            Serial.println();
-#endif
-            isTransmitting = true;
-            txAdpcmState.predicted = 0;
-            txAdpcmState.index = 0;
-            resetTxBufferState();
-            vTaskDelay(pdMS_TO_TICKS(10));
+                vTaskDelay(pdMS_TO_TICKS(10));
 
-            if (displayState != STATE_SCREEN_OFF)
-                displayState = STATE_TRANSMIT;
-            dotCount = 0;
-            lastAnimUpdate = millis();
+                if (displayState != STATE_SCREEN_OFF)
+                    displayState = STATE_TRANSMIT;
+                dotCount = 0;
+                lastAnimUpdate = millis();
 #if RADIO_DEBUG
-            Serial.println("TX mode");
+                Serial.println("TX mode");
 #endif
+            }
         }
         else if (!pressed && isTransmitting && (now - lastPttChange >= PTT_DEBOUNCE_MS))
         {
             lastPttChange = now;
-
-            // Stop transmitting first so radioTask stops sending packets
-            isTransmitting = false;
-            txNoncePending = false;
-            sessionNonceValid = false;
 
             i2s_stop(I2S_NUM_0);
             switchToSpeakerPins();
             i2s_zero_dma_buffer(I2S_NUM_0);
             i2s_start(I2S_NUM_0);
 
-            // Ask radioTask (Core 1) to transition the CC1101 back to RX mode
             requestRadioMode(RADIO_REQ_RX);
-
-            // Reset jitter buffer for clean playback
-            rxHead = 0;
-            rxTail = 0;
-            rxCount = 0;
-            rxPlaying = false;
+            vTaskDelay(pdMS_TO_TICKS(10));
 
             if (displayState != STATE_SCREEN_OFF)
             {
@@ -1531,12 +1687,22 @@ void buttonTask(void *param)
 
         static unsigned long lastLeftPressTime = 0;
         static unsigned long lastRightPressTime = 0;
+        static unsigned long lastMenuPressTime = 0;
         static unsigned long leftHoldStartTime = 0;
         static unsigned long rightHoldStartTime = 0;
         static bool leftRepeating = false;
         static bool rightRepeating = false;
 
-        if (leftState == LOW && !isTransmitting && !isProgramMode)
+        if ((upState == LOW && lastUp == HIGH || downState == LOW && lastDown == HIGH) && !isTransmitting && !walkieFeaturesPaused())
+        {
+            if (now - lastMenuPressTime > 200)
+            {
+                lastMenuPressTime = now;
+                enterMenu(STATE_MENU_LIST);
+            }
+        }
+
+        if (leftState == LOW && !isTransmitting && !walkieFeaturesPaused())
         {
             if (lastLeft == HIGH)
             { // Initial press
@@ -1556,12 +1722,12 @@ void buttonTask(void *param)
                     }
                 }
             }
-            else
+            else if (displayState == STATE_CHANNEL)
             { // Being held
                 if (!leftRepeating && (now - leftHoldStartTime > BUTTON_HOLD_DURATION))
                 {
                     leftRepeating = true;
-                    leftHoldStartTime = now; // Reset timer for the 500ms autorepeat intervals
+                    leftHoldStartTime = now; // Reset timer for the autorepeat intervals
                 }
                 if (leftRepeating && (now - leftHoldStartTime > RAPID_CHANNEL_SWITCH_TIME))
                 {
@@ -1575,7 +1741,7 @@ void buttonTask(void *param)
             leftRepeating = false;
         }
 
-        if (rightState == LOW && !isTransmitting && !isProgramMode)
+        if (rightState == LOW && !isTransmitting && !walkieFeaturesPaused())
         {
             if (lastRight == HIGH)
             { // Initial press
@@ -1595,12 +1761,12 @@ void buttonTask(void *param)
                     }
                 }
             }
-            else
+            else if (displayState == STATE_CHANNEL)
             { // Being held
                 if (!rightRepeating && (now - rightHoldStartTime > BUTTON_HOLD_DURATION))
                 {
                     rightRepeating = true;
-                    rightHoldStartTime = now; // Reset timer for the 500ms autorepeat intervals
+                    rightHoldStartTime = now; // Reset timer for the autorepeat intervals
                 }
                 if (rightRepeating && (now - rightHoldStartTime > RAPID_CHANNEL_SWITCH_TIME))
                 {
@@ -1616,6 +1782,9 @@ void buttonTask(void *param)
 
         lastLeft = leftState;
         lastRight = rightState;
+        lastUp = upState;
+        lastDown = downState;
+        lastPtt = pressed;
 
         vTaskDelay(pdMS_TO_TICKS(20)); // Debounce
     }
@@ -1690,7 +1859,7 @@ void volumeReadTask(void *param)
             }
 
             // Only change the actual volume if we are in normal walkie-talkie mode
-            if (!isProgramMode && !usbPromptActive && displayState != STATE_USB_DISCONNECTED)
+            if (!isProgramMode && !usbPromptActive && displayState != STATE_USB_DISCONNECTED && !isMenuMode())
             {
                 float newGain = 0.1f + (float)potValue * ((GAIN_MAX - 0.1f) / 4095.0f);
                 newGain = constrain(newGain, GAIN_MIN, GAIN_MAX);
@@ -1699,7 +1868,7 @@ void volumeReadTask(void *param)
                 GAIN = (int32_t)(newGain * 256);
 
                 lastVolumeChange = millis();
-                if (displayState != STATE_SCREEN_OFF && displayState != STATE_PROGRAM_MODE && displayState != STATE_PROGRAM_PROMPT)
+                if (displayState != STATE_SCREEN_OFF && displayState != STATE_PROGRAM_MODE && displayState != STATE_PROGRAM_PROMPT && !isMenuMode())
                 {
                     displayState = STATE_VOLUME;
                 }
@@ -1743,6 +1912,86 @@ void drawVolume(float gain)
     for (int i = 0; i < bars; i++)
     {
         display.fillRect(startX + i * (barWidth + spacing), barY, barWidth, 20, SSD1306_WHITE);
+    }
+}
+
+void drawMenuButton(const char *label, int16_t x, int16_t y, int16_t w, bool selected)
+{
+    const int16_t buttonH = 15;
+    if (selected)
+    {
+        display.fillRoundRect(x, y, w, buttonH, 3, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+    }
+    else
+    {
+        display.drawRoundRect(x, y, w, buttonH, 3, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+    }
+
+    int16_t x1, y1;
+    uint16_t textW, textH;
+    display.getTextBounds(label, 0, 0, &x1, &y1, &textW, &textH);
+    display.setCursor(x + (w - textW) / 2 - x1, y + (buttonH - textH) / 2 - y1);
+    display.print(label);
+    display.setTextColor(SSD1306_WHITE);
+}
+
+void drawMenuActions(const char *rightLabel)
+{
+    drawMenuButton("< Back", 0, 49, 48, !menuRightActionSelected);
+    drawMenuButton(rightLabel, 76, 49, 52, menuRightActionSelected);
+}
+
+void drawWrappedText(const char *text, int16_t x, int16_t y, int16_t maxWidth, int16_t lineHeight)
+{
+    String line = "";
+    String word = "";
+
+    for (const char *p = text;; p++)
+    {
+        char c = *p;
+        bool endOfWord = c == ' ' || c == '\n' || c == '\0';
+
+        if (!endOfWord)
+        {
+            word += c;
+            continue;
+        }
+
+        if (word.length() > 0)
+        {
+            String testLine = line.length() == 0 ? word : line + " " + word;
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(testLine.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+            if (line.length() > 0 && w > maxWidth)
+            {
+                display.setCursor(x, y);
+                display.print(line);
+                y += lineHeight;
+                line = word;
+            }
+            else
+            {
+                line = testLine;
+            }
+            word = "";
+        }
+
+        if ((c == '\n' || c == '\0') && line.length() > 0)
+        {
+            display.setCursor(x, y);
+            display.print(line);
+            y += lineHeight;
+            line = "";
+        }
+
+        if (c == '\0')
+        {
+            break;
+        }
     }
 }
 
@@ -1829,7 +2078,7 @@ void OLEDTask(void *parameter)
         }
         case STATE_SCREEN_OFF:
         {
-            // Screen stays blank; clearDisplay already called above
+            // Screen stays blank — clearDisplay already called above
             break;
         }
         case STATE_CHANNEL:
@@ -1863,6 +2112,52 @@ void OLEDTask(void *parameter)
                     display.print(encText);
                 }
             }
+            break;
+        }
+        case STATE_MENU_LIST:
+        {
+            display.setFont(&TomThumb);
+            display.setTextSize(1);
+            display.setTextColor(SSD1306_WHITE);
+            display.setCursor(0, 8);
+            display.print("Menu");
+            display.drawLine(0, 14, SCREEN_WIDTH, 14, SSD1306_WHITE);
+
+            display.fillRoundRect(0, 20, SCREEN_WIDTH, 16, 3, SSD1306_WHITE);
+            display.setTextColor(SSD1306_BLACK);
+            display.setCursor(5, 28);
+            display.print("Attempt Decrypt");
+
+            const char *status = attemptDecryptOnUnencrypted ? "ON" : "OFF";
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(status, 0, 0, &x1, &y1, &w, &h);
+            display.setCursor(SCREEN_WIDTH - w - 5 - x1, 28);
+            display.print(status);
+
+            drawMenuActions("Select");
+            display.setFont();
+            break;
+        }
+        case STATE_MENU_ATTEMPT_DECRYPT:
+        {
+            display.setFont(&TomThumb);
+            display.setTextSize(1);
+            display.setTextColor(SSD1306_WHITE);
+
+            const char *title = "Attempt Decrypt";
+            int16_t x1, y1;
+            uint16_t w, h;
+            display.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+            int16_t titleX = (SCREEN_WIDTH - w) / 2 - x1;
+            display.setCursor(titleX, 8);
+            display.print(title);
+            display.drawLine(titleX + x1, 11, titleX + x1 + w - 1, 11, SSD1306_WHITE);
+
+            drawWrappedText("Try  to decrypt on unencrypted channels when it receives an encrypted packet. Output will be noise", 4, 21, SCREEN_WIDTH - 8, 8);
+
+            drawMenuActions(attemptDecryptOnUnencrypted ? "Off" : "On");
+            display.setFont();
             break;
         }
         case STATE_PROGRAM_PROMPT:
@@ -2038,13 +2333,12 @@ void usbHandshakeTask(void *param)
         // We wait for the "ready" command from the Python program as the activation signal.
         if (Serial)
         {
-            if (!isProgramMode && !usbPromptActive && !usbRejected)
+            if (!walkieFeaturesPaused() && !usbPromptActive && !usbRejected)
             {
                 int potValue = adc1_get_raw(POT_CHANNEL);
                 if (potValue <= POT_AUTO_PROGRAM_THRESHOLD)
                 {
-                    // Device is off. Auto-enter program mode to allow headless programming
-                    // while keeping the OLED off until the knob is turned back up.
+                    // Device is off. Auto-enter program mode to allow headless programming.
                     isProgramMode = true;
                     autoProgramMode = true;
                     displayState = STATE_SCREEN_OFF;
@@ -2082,7 +2376,8 @@ void usbHandshakeTask(void *param)
                 {
                     heartbeatActive = true;
                     lastHeartbeatTime = millis();
-                    if (!isProgramMode && !usbPromptActive)
+
+                    if (!walkieFeaturesPaused() && !usbPromptActive)
                     {
                         // Show prompt when PC connects, instead of auto-entering
                         usbPromptActive = true;
@@ -2350,7 +2645,7 @@ void cc1101_init()
 {
     const float bitrate = 250.0; // kbps
     const float frequency_deviation = 127.0; // kHz
-    const float rxBandwidth = 540.0; // kHz
+    const float rxBandwidth = 812.0; // kHz
     const int8_t radio_power = 10; // dBm
 
     if (currentChannel < MIN_CHANNEL_VALUE || currentChannel > MAX_CHANNEL_VALUE)
@@ -2371,14 +2666,16 @@ void cc1101_init()
         uint8_t syncWord[2] = {0x53, 0x72};
         radio.setSyncWord(syncWord, 2);
 
-        // Keep the existing CC1101 modulation and packet behavior.
         radio.SPIsetRegValue(0x12, 0x10, 6, 4); // MDMCFG2.MOD_FORMAT = GFSK
-        radio.SPIsetRegValue(0x07, 0x00, 2, 2); // PKTCTRL1.APPEND_STATUS = off; keep RX FIFO aligned to 32-byte packets
-        radio.SPIsetRegValue(0x07, 0x01, 3, 3); // PKTCTRL1.CRC_AUTOFLUSH = on; HW drops bad-CRC packets so a single bit error can't desync the 32-byte byte stream
+        radio.SPIsetRegValue(0x13, 0x40, 6, 4); // MDMCFG1.NUM_PREAMBLE = 8 bytes (gives AGC time to lock)
+        radio.SPIsetRegValue(0x19, 0x1D, 7, 0); // FOCCFG = 0x1D: Active frequency offset tracking (compensates crystal error)
+        radio.SPIsetRegValue(0x1A, 0x1C, 7, 0); // BSCFG = 0x1C: Fast bit clock synchronization
+        radio.SPIsetRegValue(0x07, 0x00, 2, 2); // PKTCTRL1.APPEND_STATUS = off
+        radio.SPIsetRegValue(0x07, 0x01, 3, 3); // PKTCTRL1.CRC_AUTOFLUSH = on
         radio.SPIsetRegValue(0x17, 0x0C, 3, 2); // MCSM1.RXOFF_MODE = stay in RX
-        radio.SPIsetRegValue(0x18, 0x00, 5, 4); // MCSM0.FS_AUTOCAL = never; we calibrate manually (cc1101_calibrate) to avoid recalibrating on every packet
+        radio.SPIsetRegValue(0x17, 0x00, 1, 0); // MCSM1.TXOFF_MODE = IDLE
+        radio.SPIsetRegValue(0x18, 0x10, 5, 4); // MCSM0.FS_AUTOCAL = 01 (autocalibrate on transition from IDLE to RX/TX)
 
-        radio.setPacketReceivedAction(cc1101PacketISR);
         cc1101_start_rx();
     }
     else
@@ -2399,6 +2696,8 @@ void cc1101_init()
 // =================================================================
 // 7. MAIN HARDWARE SETUP
 // =================================================================
+
+const bool RESET_NVS_ON_BOOT = false;
 
 void setup()
 {
@@ -2441,27 +2740,39 @@ void setup()
 
     startupTime = millis();
     preferences.begin("walkie", false);
-    // Clear stored settings once after each new upload.
-    String storedBuildId = preferences.getString("build_id", "");
-    if (storedBuildId != BUILD_ID)
+
+    if (RESET_NVS_ON_BOOT)
     {
         preferences.clear();
         preferences.putString("build_id", BUILD_ID);
+        Serial.println("NVS reset enabled in code. Stored settings cleared.");
     }
+    else
+    {
+        String storedBuildId = preferences.getString("build_id", "");
+        if (storedBuildId != BUILD_ID)
+        {
+            preferences.putString("build_id", BUILD_ID);
+        }
+    }
+
     deviceName = preferences.getString("device_name", "Walkie-Talkie");
     updateDeviceMessage();
     devicePassword = preferences.getString("device_pwd", "");
     radioPassword = preferences.getString("radio_pwd", "");
     radioSaltValue = preferences.getString("radio_salt", "");
+    attemptDecryptOnUnencrypted = preferences.getBool("attempt_dec", false);
     loadEncryptedChannels();
-    initRadioEncryption(); // Derive radio key & nonce from the stored radio password.
+
     // --- GPIO Setup ---
     pinMode(BUTTON, INPUT_PULLUP);
     pinMode(BTN_LEFT, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_UP, INPUT_PULLUP);
+    pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(CC1101_GDO0, INPUT);
     pinMode(LED_PIN, OUTPUT);
-    setActivityLed(false);
+    digitalWrite(LED_PIN, LOW);
 
     // --- Preferences Setup ---
     currentChannel = preferences.getUChar("channel", MIN_CHANNEL_VALUE);
@@ -2469,6 +2780,7 @@ void setup()
         currentChannel = MIN_CHANNEL_VALUE;
     savedChannel = currentChannel;
     refreshCurrentChannelEncryption();
+    initRadioEncryption(); // Derive radio key after the saved channel is known.
 
     // --- SPI Radio Setup ---
     spiCC.begin(CC1101_SCK, CC1101_MISO, CC1101_MOSI, CC1101_CS);
@@ -2493,7 +2805,7 @@ void setup()
 
     // --- Boot Tasks on Dual Cores ---
     xTaskCreatePinnedToCore(audioCaptureTask, "AudioCapture", 4096, NULL, 3, NULL, 1);
-    xTaskCreatePinnedToCore(radioTask, "RadioTask", 4096, NULL, 4, NULL, 1);   // Highest priority on core 1
+    xTaskCreatePinnedToCore(radioTask, "RadioTask", 4096, NULL, 3, NULL, 1);   // Core 1 radio handler
     xTaskCreatePinnedToCore(playbackTask, "Playback", 4096, NULL, 2, NULL, 1); // Below radio, paced by I2S DMA
     xTaskCreatePinnedToCore(buttonTask, "ButtonTask", 2048, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(volumeReadTask, "VolumeRead", 2048, NULL, 1, NULL, 0);
